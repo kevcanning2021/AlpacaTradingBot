@@ -28,10 +28,10 @@ ENABLE_REENTRY = True
 INITIAL_EQUITY = float(os.getenv('INITIAL_EQUITY', '100000'))
 
 # Email Notifications
-EMAIL_ENABLED = False
-EMAIL_SMTP_HOST = ''
-EMAIL_SMTP_PORT = 587
-EMAIL_SMTP_USER = ''
-EMAIL_SMTP_PASSWORD = ''
-EMAIL_FROM = ''
-EMAIL_TO = []
+EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
+EMAIL_SMTP_HOST = os.getenv('EMAIL_SMTP_HOST', 'smtp.gmail.com')
+EMAIL_SMTP_PORT = int(os.getenv('EMAIL_SMTP_PORT', '587'))
+EMAIL_SMTP_USER = os.getenv('EMAIL_SMTP_USER', '')
+EMAIL_SMTP_PASSWORD = os.getenv('EMAIL_SMTP_PASSWORD', '')
+EMAIL_FROM = os.getenv('EMAIL_FROM', '')
+EMAIL_TO = [e.strip() for e in os.getenv('EMAIL_TO', '').split(',') if e.strip()]
