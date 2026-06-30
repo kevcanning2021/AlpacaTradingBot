@@ -60,3 +60,47 @@ class EmailNotifier:
         ]
 
         return subject, '\n'.join(body)
+
+    def build_daily_report_email(self, report: dict) -> Tuple[str, str]:
+        """Build a subject and body for the daily account status report."""
+        status = report.get('status', {})
+        performance = report.get('performance', {})
+        timestamp = report.get('timestamp')
+
+        subject = f"Daily Status Report - {timestamp}"
+
+        lines = [
+            f"Daily account summary as of {timestamp}",
+            '',
+            'Account Status:',
+            f"- Status: {status.get('account_status')}",
+            f"- Equity: ${status.get('equity', 'N/A')}",
+            f"- Buying Power: ${status.get('buying_power', 'N/A')}",
+            f"- Open Positions: {status.get('open_positions', 0)}",
+            ''
+        ]
+
+        positions = status.get('positions') or []
+        if positions:
+            lines.append('Positions:')
+            for pos in positions:
+                symbol = pos.get('symbol')
+                qty = pos.get('qty')
+                current = float(pos.get('current_price', 0))
+                entry = float(pos.get('avg_entry_price', 0))
+                pnl = float(pos.get('unrealized_pl', 0))
+                pnl_pct = float(pos.get('unrealized_plpc', 0)) * 100
+                lines.append(f"- {symbol}: {qty} shares @ ${current:.2f} (Entry: ${entry:.2f}, P&L: ${pnl:.2f} / {pnl_pct:.2f}%)")
+            lines.append('')
+
+        lines.extend([
+            'Performance:',
+            f"- Total unrealized P&L: ${performance.get('total_pnl', 0):.2f}",
+            f"- Winning positions: {performance.get('winning_positions', 0)}",
+            f"- Losing positions: {performance.get('losing_positions', 0)}",
+            f"- Win streak: {performance.get('win_streak', 0)}",
+            f"- Loss streak: {performance.get('loss_streak', 0)}",
+            f"- Account return: {performance.get('account_return', 0):.2f}%"
+        ])
+
+        return subject, '\n'.join(lines)

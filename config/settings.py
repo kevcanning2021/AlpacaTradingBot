@@ -20,7 +20,12 @@ STOP_LOSS_THRESHOLD = 0.05  # Adjust stops when position moves 5%
 REENTRY_THRESHOLD = 0.05    # Re-enter when pullback is 5%
 
 # Timezone
-TIMEZONE = 'US/Eastern'
+TIMEZONE = 'US/Eastern'  # Market hours are always NYSE/NASDAQ hours (ET), regardless of server location
+REPORT_TIMEZONE = 'Africa/Johannesburg'  # Used for displayed timestamps and the daily report schedule
+
+# Daily Report
+DAILY_REPORT_HOUR = 7    # In REPORT_TIMEZONE
+DAILY_REPORT_MINUTE = 0
 
 # Position Management
 ENABLE_STOP_LOSS_ADJUSTMENT = True

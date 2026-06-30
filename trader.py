@@ -1,12 +1,18 @@
 import logging
 from datetime import datetime
 from typing import Dict
+import pytz
 from alpaca_client import AlpacaClient
 from config import settings
 from email_notifier import EmailNotifier
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _now() -> str:
+    """Current time in REPORT_TIMEZONE, ISO format."""
+    return datetime.now(pytz.timezone(settings.REPORT_TIMEZONE)).isoformat()
 
 
 class TradingManager:
@@ -29,7 +35,7 @@ class TradingManager:
             account = self.client.get_account()
             
             report = {
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': _now(),
                 'account_equity': account.get('equity'),
                 'buying_power': account.get('buying_power'),
                 'positions_checked': len(positions),
@@ -67,7 +73,7 @@ class TradingManager:
         
         except Exception as e:
             logger.error(f"Error checking positions: {e}")
-            return {'error': str(e), 'timestamp': datetime.now().isoformat()}
+            return {'error': str(e), 'timestamp': _now()}
     
     def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
         """Handle stop loss adjustments at 5% threshold"""
@@ -158,7 +164,7 @@ class TradingManager:
             current_equity = float(account.get('equity', settings.INITIAL_EQUITY))
 
             adjustments = {
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': _now(),
                 'previous_stop_loss': settings.STOP_LOSS_THRESHOLD,
                 'previous_reentry': settings.REENTRY_THRESHOLD,
                 'changes_made': [],
@@ -259,3 +265,11 @@ class TradingManager:
         except Exception as e:
             logger.error(f"Error analyzing performance: {e}")
             return {'error': str(e)}
+
+    def build_daily_report(self) -> Dict:
+        """Build a combined account status + performance summary for the daily report email."""
+        return {
+            'timestamp': _now(),
+            'status': self.get_trading_status(),
+            'performance': self.analyze_performance()
+        }
