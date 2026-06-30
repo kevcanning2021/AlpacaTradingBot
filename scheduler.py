@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Dict
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 import pytz
 from trader import TradingManager
 from config.settings import (
@@ -87,9 +87,9 @@ class MarketHoursScheduler:
             return
         
         try:
-            # Schedule the check job to run every CHECK_INTERVAL_MINUTES during market hours (Mon-Fri)
-            # We'll use a workaround: schedule every CHECK_INTERVAL_MINUTES and check if market is open inside the job
-            trigger = CronTrigger(minute=f'*/{CHECK_INTERVAL_MINUTES}', timezone=TIMEZONE)
+            # Schedule the check job to run every CHECK_INTERVAL_MINUTES; market-hours
+            # filtering happens inside the job itself via _is_market_open()
+            trigger = IntervalTrigger(minutes=CHECK_INTERVAL_MINUTES, timezone=TIMEZONE)
             self.scheduler.add_job(
                 self._check_positions_job,
                 trigger=trigger,
