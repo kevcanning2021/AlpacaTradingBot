@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict
 from alpaca_client import AlpacaClient
 from config import settings
 from email_notifier import EmailNotifier
@@ -155,8 +155,8 @@ class TradingManager:
         """Dynamically adjust strategy parameters based on performance"""
         try:
             account = self.client.get_account()
-            current_equity = float(account.get('equity', 100000))
-            
+            current_equity = float(account.get('equity', settings.INITIAL_EQUITY))
+
             adjustments = {
                 'timestamp': datetime.now().isoformat(),
                 'previous_stop_loss': settings.STOP_LOSS_THRESHOLD,

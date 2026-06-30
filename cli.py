@@ -1,6 +1,4 @@
 import logging
-import json
-from datetime import datetime
 from scheduler import get_scheduler
 from config import settings
 

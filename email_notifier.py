@@ -1,6 +1,6 @@
 import smtplib
 from email.message import EmailMessage
-from typing import List
+from typing import Tuple
 from config import settings
 
 
@@ -37,7 +37,7 @@ class EmailNotifier:
 
         return True
 
-    def build_strategy_change_email(self, adjustments: dict) -> (str, str):
+    def build_strategy_change_email(self, adjustments: dict) -> Tuple[str, str]:
         """Build a subject and body for a strategy change notification."""
         subject = f"Strategy Change Notification - {adjustments.get('timestamp')}"
         changes = '\n'.join(f"- {change}" for change in adjustments.get('changes_made', []))
