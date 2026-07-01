@@ -4,7 +4,7 @@ from typing import Dict
 import pytz
 from alpaca_client import AlpacaClient
 from config import settings
-from email_notifier import EmailNotifier
+from whatsapp_notifier import WhatsAppNotifier
 from scanner import OpportunityScanner
 
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +21,7 @@ class TradingManager:
     
     def __init__(self):
         self.client = AlpacaClient()
-        self.notifier = EmailNotifier()
+        self.notifier = WhatsAppNotifier()
         self.position_entry_prices = {}  # Track entry prices
         self.position_peak_prices = {}   # Track peak prices for stop loss
         self.trade_history = []          # Track all trades for P&L analysis

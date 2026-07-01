@@ -38,6 +38,11 @@ WATCHLIST = [s.strip() for s in os.getenv('WATCHLIST', 'AAPL,MSFT,GOOGL,AMZN,NVD
 POSITION_SIZE_USD = float(os.getenv('POSITION_SIZE_USD', '1000'))  # Dollar amount per new position
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '5'))               # Max concurrent open positions
 
+# WhatsApp Notifications (via CallMeBot)
+WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'
+WHATSAPP_PHONE = os.getenv('WHATSAPP_PHONE', '')    # International format without +, e.g. 27831234567
+WHATSAPP_APIKEY = os.getenv('WHATSAPP_APIKEY', '')  # API key received from CallMeBot
+
 # Email Notifications
 EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
 EMAIL_SMTP_HOST = os.getenv('EMAIL_SMTP_HOST', 'smtp.gmail.com')
