@@ -61,6 +61,36 @@ class EmailNotifier:
 
         return subject, '\n'.join(body)
 
+    def build_trade_execution_email(self, scan_report: dict) -> Tuple[str, str]:
+        """Build a subject and body for trade execution notifications."""
+        executed = scan_report.get('executed', [])
+        timestamp = scan_report.get('timestamp')
+        subject = f"Trade Alert: {len(executed)} order(s) executed — {timestamp}"
+
+        lines = [f"{len(executed)} trade(s) executed at {timestamp}", '']
+
+        buys = [e for e in executed if e['side'] == 'buy']
+        sells = [e for e in executed if e['side'] == 'sell']
+
+        if buys:
+            lines.append('Buys:')
+            for t in buys:
+                lines.append(f"  BUY {t['qty']} {t['symbol']} @ ~${t['price']:.2f} — {t['reason']}")
+            lines.append('')
+
+        if sells:
+            lines.append('Sells:')
+            for t in sells:
+                lines.append(f"  SELL {t['symbol']} — {t['reason']}")
+            lines.append('')
+
+        if scan_report.get('errors'):
+            lines.append('Errors:')
+            for err in scan_report['errors']:
+                lines.append(f"  - {err}")
+
+        return subject, '\n'.join(lines)
+
     def build_daily_report_email(self, report: dict) -> Tuple[str, str]:
         """Build a subject and body for the daily account status report."""
         status = report.get('status', {})

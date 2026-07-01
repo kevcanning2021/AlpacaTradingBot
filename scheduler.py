@@ -52,10 +52,22 @@ class MarketHoursScheduler:
             return
         
         logger.info("=" * 60)
-        logger.info("Starting position check...")
-        
+        logger.info("Starting position check and opportunity scan...")
+
         try:
+            # 1. Scan watchlist and execute any new buy/sell signals
+            scan_report = self.trading_manager.scan_and_execute()
+            if scan_report.get('executed'):
+                logger.info(f"Scanner executed {len(scan_report['executed'])} trade(s):")
+                for trade in scan_report['executed']:
+                    qty_str = f"{trade['qty']} " if trade.get('qty') else ''
+                    logger.info(f"  {trade['side'].upper()} {qty_str}{trade['symbol']} — {trade['reason']}")
+            if scan_report.get('errors'):
+                logger.warning(f"Scanner errors: {scan_report['errors']}")
+
+            # 2. Review all open positions (including any just opened)
             report = self.trading_manager.check_positions()
+            report['scan_report'] = scan_report
             self.last_check = report
             self.check_history.append(report)
 
@@ -64,23 +76,23 @@ class MarketHoursScheduler:
 
             strategy_report = self.trading_manager.adjust_strategy()
             report['strategy_adjustment'] = strategy_report
-            
+
             # Keep only last 100 checks
             if len(self.check_history) > 100:
                 self.check_history.pop(0)
-            
-            logger.info(f"Position check completed at {report.get('timestamp')}")
+
+            logger.info(f"Check completed at {report.get('timestamp')}")
             if report.get('actions_taken'):
                 logger.info(f"Actions: {len(report['actions_taken'])} recommendation(s)")
                 for action in report['actions_taken']:
                     logger.info(f"  - {action.get('action')}: {action.get('symbol')} - {action.get('recommendation')}")
-            
+
             if strategy_report.get('changes_made'):
                 logger.info(f"Strategy adjustments applied: {strategy_report.get('changes_made')}")
-            
+
             if report.get('errors'):
                 logger.warning(f"Errors: {report['errors']}")
-        
+
         except Exception as e:
             logger.error(f"Error in position check job: {e}")
 

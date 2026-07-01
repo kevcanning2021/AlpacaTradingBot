@@ -5,6 +5,7 @@ import pytz
 from alpaca_client import AlpacaClient
 from config import settings
 from email_notifier import EmailNotifier
+from scanner import OpportunityScanner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -265,6 +266,77 @@ class TradingManager:
         except Exception as e:
             logger.error(f"Error analyzing performance: {e}")
             return {'error': str(e)}
+
+    def scan_and_execute(self) -> Dict:
+        """Scan the watchlist for opportunities and execute buy/sell orders."""
+        scanner = OpportunityScanner(self.client)
+        signals = scanner.scan(settings.WATCHLIST)
+
+        try:
+            positions = self.client.get_positions()
+            account = self.client.get_account()
+        except Exception as e:
+            return {'timestamp': _now(), 'error': str(e), 'signals': signals, 'executed': [], 'errors': [str(e)]}
+
+        current_symbols = {p['symbol'] for p in positions}
+        buying_power = float(account.get('buying_power', 0))
+        executed = []
+        errors = []
+
+        for sig in signals:
+            symbol = sig['symbol']
+            signal = sig['signal']
+            price = float(sig.get('price', 0))
+
+            if signal == 'buy':
+                if symbol in current_symbols:
+                    continue
+                pending_buys = sum(1 for e in executed if e['side'] == 'buy')
+                if len(positions) + pending_buys >= settings.MAX_POSITIONS:
+                    logger.info(f"[SCANNER] Skipping {symbol} buy — max positions ({settings.MAX_POSITIONS}) reached")
+                    continue
+                if price <= 0 or buying_power < settings.POSITION_SIZE_USD:
+                    logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
+                    continue
+                qty = int(settings.POSITION_SIZE_USD / price)
+                if qty < 1:
+                    continue
+                try:
+                    order = self.client.create_order(symbol, qty, 'buy')
+                    cost = qty * price
+                    buying_power -= cost
+                    executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
+                    logger.info(f"[SCANNER] BUY {qty} {symbol} @ ~${price:.2f} — {sig['reason']}")
+                except Exception as e:
+                    errors.append(f"Buy {symbol}: {e}")
+                    logger.error(f"[SCANNER] Failed to buy {symbol}: {e}")
+
+            elif signal == 'sell' and symbol in current_symbols:
+                try:
+                    self.client.close_position(symbol)
+                    executed.append({'side': 'sell', 'symbol': symbol, 'reason': sig['reason']})
+                    logger.info(f"[SCANNER] SELL {symbol} — {sig['reason']}")
+                except Exception as e:
+                    errors.append(f"Sell {symbol}: {e}")
+                    logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
+
+        result = {
+            'timestamp': _now(),
+            'watchlist': settings.WATCHLIST,
+            'signals': signals,
+            'executed': executed,
+            'errors': errors,
+        }
+
+        if executed and self.notifier.enabled:
+            try:
+                subject, body = self.notifier.build_trade_execution_email(result)
+                self.notifier.send(subject, body)
+                logger.info('Trade execution email sent')
+            except Exception as e:
+                logger.error(f'Failed to send trade email: {e}')
+
+        return result
 
     def build_daily_report(self) -> Dict:
         """Build a combined account status + performance summary for the daily report email."""

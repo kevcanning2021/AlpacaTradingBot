@@ -7,6 +7,7 @@ load_dotenv()
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY', '')
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets/v2'
+DATA_BASE_URL = 'https://data.alpaca.markets/v2'
 
 # Market Hours (ET)
 MARKET_OPEN_HOUR = 9
@@ -31,6 +32,11 @@ DAILY_REPORT_MINUTE = 0
 ENABLE_STOP_LOSS_ADJUSTMENT = True
 ENABLE_REENTRY = True
 INITIAL_EQUITY = float(os.getenv('INITIAL_EQUITY', '100000'))
+
+# Opportunity Scanner
+WATCHLIST = [s.strip() for s in os.getenv('WATCHLIST', 'AAPL,MSFT,GOOGL,AMZN,NVDA,SPY,QQQ').split(',') if s.strip()]
+POSITION_SIZE_USD = float(os.getenv('POSITION_SIZE_USD', '1000'))  # Dollar amount per new position
+MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '5'))               # Max concurrent open positions
 
 # Email Notifications
 EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'

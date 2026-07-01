@@ -2,7 +2,7 @@ import json
 import urllib.request
 import urllib.error
 from typing import Dict, List, Optional, Tuple
-from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
+from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, DATA_BASE_URL
 
 
 class AlpacaClient:
@@ -102,3 +102,19 @@ class AlpacaClient:
         """Cancel an order"""
         status, body = self._request('DELETE', f'/orders/{order_id}')
         return status == 204
+
+    def get_bars(self, symbol: str, timeframe: str = '1Day', limit: int = 35) -> List[Dict]:
+        """Fetch OHLCV bars from the Alpaca data API."""
+        url = (
+            f'{DATA_BASE_URL}/stocks/{symbol}/bars'
+            f'?timeframe={timeframe}&limit={limit}&feed=iex&sort=asc'
+        )
+        req = urllib.request.Request(url)
+        req.add_header('APCA-API-KEY-ID', self.api_key)
+        req.add_header('APCA-API-SECRET-KEY', self.secret_key)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+                return data.get('bars', [])
+        except Exception as e:
+            return []
