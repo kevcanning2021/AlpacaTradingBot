@@ -298,15 +298,13 @@ class TradingManager:
                 if price <= 0 or buying_power < settings.POSITION_SIZE_USD:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
                     continue
-                qty = int(settings.POSITION_SIZE_USD / price)
-                if qty < 1:
-                    continue
+                notional = round(settings.POSITION_SIZE_USD, 2)
                 try:
-                    order = self.client.create_order(symbol, qty, 'buy')
-                    cost = qty * price
-                    buying_power -= cost
+                    order = self.client.create_order(symbol, side='buy', notional=notional)
+                    qty = round(notional / price, 4)
+                    buying_power -= notional
                     executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
-                    logger.info(f"[SCANNER] BUY {qty} {symbol} @ ~${price:.2f} — {sig['reason']}")
+                    logger.info(f"[SCANNER] BUY ~${notional:.2f} ({qty} sh) {symbol} @ ~${price:.2f} — {sig['reason']}")
                 except Exception as e:
                     errors.append(f"Buy {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to buy {symbol}: {e}")

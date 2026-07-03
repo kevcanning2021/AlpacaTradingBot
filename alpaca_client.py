@@ -57,18 +57,25 @@ class AlpacaClient:
         else:
             return None
     
-    def create_order(self, symbol: str, qty: float, side: str, 
+    def create_order(self, symbol: str, qty: Optional[float] = None, side: str = 'buy',
                     order_type: str = 'market', limit_price: Optional[float] = None,
-                    stop_price: Optional[float] = None, time_in_force: str = 'day') -> Dict:
-        """Create a new order"""
+                    stop_price: Optional[float] = None, time_in_force: str = 'day',
+                    notional: Optional[float] = None) -> Dict:
+        """Create a new order. Provide either qty (shares) or notional (dollar amount, fractional-share buys)."""
+        if (qty is None) == (notional is None):
+            raise ValueError("create_order requires exactly one of qty or notional")
+
         payload = {
             'symbol': symbol,
-            'qty': qty,
             'side': side,
             'type': order_type,
             'time_in_force': time_in_force
         }
-        
+        if notional is not None:
+            payload['notional'] = notional
+        else:
+            payload['qty'] = qty
+
         if limit_price:
             payload['limit_price'] = limit_price
         if stop_price:
