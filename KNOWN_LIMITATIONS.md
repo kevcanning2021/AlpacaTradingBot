@@ -3,9 +3,19 @@
 ## Deployment
 
 The bot runs as a systemd service (`alpaca-bot.service`) on a DigitalOcean VPS,
-executing `run_server.py`. This keeps one long-lived `TradingManager` instance
-in memory for the life of the process, so peak-price tracking and win/loss
-streaks accumulate correctly across checks during market hours.
+executing `run_server.py` from `/opt/alpaca-bot`. This keeps one long-lived
+`TradingManager` instance in memory for the life of the process, so peak-price
+tracking and win/loss streaks accumulate correctly across checks during market
+hours.
+
+A second, independent instance — `alpaca-bot-test.service`, running from
+`/opt/alpaca-bot-test` — was added on the same VPS to trial the opportunity
+scanner against a $100 Alpaca paper account (small enough that whole-share
+`qty` orders would round to 0 on most watchlist symbols, which is why scanner
+buys now use notional/fractional-dollar sizing instead — see `trader.py:
+scan_and_execute` and `alpaca_client.py: create_order`). It's a separate git
+clone, venv, and `.env`, so it runs independently of production and doesn't
+affect it.
 
 The claude.ai scheduled routine used during initial setup has been disabled —
 it ran each check in a fresh, stateless session, which meant re-entry and
@@ -22,12 +32,13 @@ authorized for private repo access in this account at setup time.
 ## Credential storage
 
 The Alpaca API key/secret and Gmail app password are stored in plaintext in
-two places: the VPS's `/opt/alpaca-bot/.env` (root-only, `chmod 600`), and the
-disabled claude.ai routine's config (no dedicated secrets store exists there
-per Anthropic's docs — visible to anyone who can edit that routine). Low risk
-for a single-user account, but not a hardened secrets setup. SSH access to the
-VPS uses a dedicated deploy key (`alpaca_bot_deploy`), separate from the
-personal key used for GitHub.
+three places: the VPS's `/opt/alpaca-bot/.env` (production account, root-only,
+`chmod 600`), `/opt/alpaca-bot-test/.env` (the $100 test account, same
+permissions), and the disabled claude.ai routine's config (no dedicated
+secrets store exists there per Anthropic's docs — visible to anyone who can
+edit that routine). Low risk for a single-user account, but not a hardened
+secrets setup. SSH access to the VPS uses a dedicated deploy key
+(`alpaca_bot_deploy`), separate from the personal key used for GitHub.
 
 ## Why state matters: re-entry and streak logic
 
