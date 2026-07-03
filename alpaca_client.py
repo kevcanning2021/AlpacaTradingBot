@@ -1,6 +1,7 @@
 import json
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, DATA_BASE_URL
 
@@ -111,10 +112,16 @@ class AlpacaClient:
         return status == 204
 
     def get_bars(self, symbol: str, timeframe: str = '1Day', limit: int = 35) -> List[Dict]:
-        """Fetch OHLCV bars from the Alpaca data API."""
+        """Fetch the most recent `limit` OHLCV bars from the Alpaca data API.
+
+        Alpaca's bars endpoint returns `bars: null` when no `start` is given,
+        so one is computed here (with slack for weekends/holidays) and the
+        result is trimmed to the most recent `limit` bars in Python.
+        """
+        start = (datetime.now(timezone.utc) - timedelta(days=limit * 3)).strftime('%Y-%m-%d')
         url = (
             f'{DATA_BASE_URL}/stocks/{symbol}/bars'
-            f'?timeframe={timeframe}&limit={limit}&feed=iex&sort=asc'
+            f'?timeframe={timeframe}&start={start}&limit=10000&feed=iex&sort=asc'
         )
         req = urllib.request.Request(url)
         req.add_header('APCA-API-KEY-ID', self.api_key)
@@ -122,6 +129,7 @@ class AlpacaClient:
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode())
-                return data.get('bars', [])
+                bars = data.get('bars') or []
+                return bars[-limit:]
         except Exception as e:
             return []
