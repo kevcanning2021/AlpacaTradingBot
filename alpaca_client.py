@@ -1,9 +1,12 @@
 import json
+import logging
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, DATA_BASE_URL
+
+logger = logging.getLogger(__name__)
 
 
 class AlpacaClient:
@@ -132,4 +135,5 @@ class AlpacaClient:
                 bars = data.get('bars') or []
                 return bars[-limit:]
         except Exception as e:
+            logger.error(f"[get_bars] Failed to fetch bars for {symbol}: {e}")
             return []
