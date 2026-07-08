@@ -51,7 +51,7 @@ class AlpacaClient:
         if status == 200:
             return json.loads(body)
         else:
-            return []
+            raise Exception(f"Failed to get positions: {status} - {body}")
     
     def get_position(self, symbol: str) -> Optional[Dict]:
         """Get specific position by symbol"""
@@ -107,7 +107,7 @@ class AlpacaClient:
         if status_code == 200:
             return json.loads(body)
         else:
-            return []
+            raise Exception(f"Failed to get orders: {status_code} - {body}")
     
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an order"""

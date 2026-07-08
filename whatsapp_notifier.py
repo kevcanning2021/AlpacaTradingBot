@@ -51,6 +51,15 @@ class WhatsAppNotifier:
         ])
         return subject, body
 
+    def build_position_alert_email(self, report: dict) -> Tuple[str, str]:
+        actions = report.get('actions_taken', [])
+        subject = f"Position Alert: {len(actions)} action(s)"
+        lines = [f"Checked at {report.get('timestamp')}", '']
+        for a in actions:
+            lines.append(f"{a.get('action')}: {a.get('symbol')} ({a.get('pnl_pct', a.get('pullback_pct'))}%)")
+            lines.append(f"  {a.get('recommendation')}")
+        return subject, '\n'.join(lines)
+
     def build_trade_execution_email(self, scan_report: dict) -> Tuple[str, str]:
         executed = scan_report.get('executed', [])
         subject = f"Trade Alert: {len(executed)} order(s)"

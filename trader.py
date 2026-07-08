@@ -69,7 +69,15 @@ class TradingManager:
                 # Handle re-entries
                 if settings.ENABLE_REENTRY:
                     self._handle_reentry(symbol, position, pnl_pct, report)
-            
+
+            if report['actions_taken'] and self.notifier.enabled:
+                try:
+                    subject, body = self.notifier.build_position_alert_email(report)
+                    self.notifier.send(subject, body)
+                    logger.info('Position alert sent')
+                except Exception as e:
+                    logger.error(f'Failed to send position alert: {e}')
+
             return report
         
         except Exception as e:
