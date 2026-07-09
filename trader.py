@@ -63,11 +63,17 @@ class TradingManager:
                         self.position_peak_prices[symbol] = current_price
                 
                 # Handle stop loss adjustments
+                closed = False
                 if settings.ENABLE_STOP_LOSS_ADJUSTMENT:
-                    self._handle_stop_loss(symbol, position, pnl_pct, report)
-                
+                    closed = self._handle_stop_loss(symbol, position, pnl_pct, report)
+
+                # Trailing stop: protects gains given back from a position's peak,
+                # which the entry-anchored stop loss above can't see at all
+                if not closed and settings.ENABLE_STOP_LOSS_ADJUSTMENT:
+                    closed = self._handle_trailing_stop(symbol, position, report)
+
                 # Handle re-entries
-                if settings.ENABLE_REENTRY:
+                if not closed and settings.ENABLE_REENTRY:
                     self._handle_reentry(symbol, position, pnl_pct, report)
 
             if report['actions_taken'] and self.notifier.enabled:
@@ -84,8 +90,8 @@ class TradingManager:
             logger.error(f"Error checking positions: {e}")
             return {'error': str(e), 'timestamp': _now()}
     
-    def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
-        """Handle stop loss adjustments at 5% threshold"""
+    def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict) -> bool:
+        """Handle stop loss adjustments at 5% threshold. Returns True if the position was closed."""
         try:
             # If position is up at or above current stop loss threshold, consider tightening stop
             if pnl_pct >= settings.STOP_LOSS_THRESHOLD:
@@ -97,12 +103,16 @@ class TradingManager:
                 }
                 report['actions_taken'].append(action)
                 logger.info(f"[{symbol}] Position up {round(pnl_pct * 100, 2)}% - Stop loss adjustment recommended")
-            
+                return False
+
             # If position is down at or below current stop loss threshold, close it
             elif pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
+                closed = False
                 try:
                     self.client.close_position(symbol)
                     self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
+                    self.position_peak_prices.pop(symbol, None)
+                    closed = True
                     action = {
                         'action': 'STOP_LOSS_TRIGGERED',
                         'symbol': symbol,
@@ -119,10 +129,63 @@ class TradingManager:
                     }
                     logger.error(f"[{symbol}] Stop loss close failed: {close_error}")
                 report['actions_taken'].append(action)
-        
+                return closed
+
+            return False
+
         except Exception as e:
             report['errors'].append(f"Error handling stop loss for {symbol}: {e}")
             logger.error(f"Error handling stop loss for {symbol}: {e}")
+            return False
+
+    def _handle_trailing_stop(self, symbol: str, position: Dict, report: Dict) -> bool:
+        """Close a position if it has pulled back STOP_LOSS_THRESHOLD from its peak price.
+
+        Separate from _handle_reentry's pullback-from-peak check below, which is an
+        advisory add-to-position suggestion on REENTRY_THRESHOLD, not a sell — this
+        is the downside-protection counterpart, using STOP_LOSS_THRESHOLD, since the
+        entry-anchored stop loss above can't see gains a position has given back.
+        Returns True if the position was closed.
+        """
+        try:
+            peak_price = self.position_peak_prices.get(symbol, 0)
+            current_price = float(position.get('current_price', 0))
+            if peak_price <= 0:
+                return False
+
+            pullback_pct = (peak_price - current_price) / peak_price
+            if pullback_pct < settings.STOP_LOSS_THRESHOLD:
+                return False
+
+            try:
+                self.client.close_position(symbol)
+                self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
+                self.position_peak_prices.pop(symbol, None)
+                action = {
+                    'action': 'TRAILING_STOP_TRIGGERED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'peak_price': round(peak_price, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak (${round(peak_price, 2)}). Closed automatically.'
+                }
+                logger.warning(f"[{symbol}] Pulled back {round(pullback_pct * 100, 2)}% from peak ${round(peak_price, 2)} - closed automatically (trailing stop)")
+                report['actions_taken'].append(action)
+                return True
+            except Exception as close_error:
+                action = {
+                    'action': 'TRAILING_STOP_ALERT',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak. Automatic close FAILED: {close_error}'
+                }
+                logger.error(f"[{symbol}] Trailing stop close failed: {close_error}")
+                report['actions_taken'].append(action)
+                return False
+
+        except Exception as e:
+            report['errors'].append(f"Error handling trailing stop for {symbol}: {e}")
+            logger.error(f"Error handling trailing stop for {symbol}: {e}")
+            return False
     
     def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
         """Handle re-entry logic at current pullback threshold"""
@@ -341,6 +404,7 @@ class TradingManager:
                     logger.info(f"[SCANNER] SELL {symbol} — {sig['reason']}")
                     if position is not None:
                         self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
+                    self.position_peak_prices.pop(symbol, None)
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
