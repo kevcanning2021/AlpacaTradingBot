@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpaca Dashboard</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="login-screen" class="screen">
+  <form id="login-form">
+    <h1>Alpaca Dashboard</h1>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Log in</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</div>
+
+<div id="app-screen" class="screen hidden">
+  <header>
+    <div class="tabs" id="account-tabs"></div>
+    <button id="logout-btn">Log out</button>
+  </header>
+
+  <section id="summary-card" class="card"></section>
+
+  <section class="card">
+    <h2>Positions</h2>
+    <table id="positions-table">
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&amp;L</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Recent Orders</h2>
+    <table id="orders-table">
+      <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th>Filled Price</th><th>Submitted</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <p id="offline-banner" class="hidden">Can't reach the server — showing last known state.</p>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

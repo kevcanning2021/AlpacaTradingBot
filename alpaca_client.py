@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 class AlpacaClient:
     """Wrapper for Alpaca Trading API"""
     
-    def __init__(self):
-        self.api_key = ALPACA_API_KEY
-        self.secret_key = ALPACA_SECRET_KEY
-        self.base_url = ALPACA_BASE_URL
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None,
+                 base_url: Optional[str] = None, data_base_url: Optional[str] = None):
+        self.api_key = api_key or ALPACA_API_KEY
+        self.secret_key = secret_key or ALPACA_SECRET_KEY
+        self.base_url = base_url or ALPACA_BASE_URL
+        self.data_base_url = data_base_url or DATA_BASE_URL
     
     def _request(self, method: str, path: str, payload: Optional[Dict] = None) -> Tuple[int, str]:
         """Make authenticated request to Alpaca API"""
@@ -123,7 +125,7 @@ class AlpacaClient:
         """
         start = (datetime.now(timezone.utc) - timedelta(days=limit * 3)).strftime('%Y-%m-%d')
         url = (
-            f'{DATA_BASE_URL}/stocks/{symbol}/bars'
+            f'{self.data_base_url}/stocks/{symbol}/bars'
             f'?timeframe={timeframe}&start={start}&limit=10000&feed=iex&sort=asc'
         )
         req = urllib.request.Request(url)
