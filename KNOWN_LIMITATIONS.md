@@ -50,7 +50,12 @@ secrets setup. SSH access to the VPS uses a dedicated deploy key
 - The win/loss-streak strategy adjustments in `adjust_strategy()` (tightening
   or loosening stops after 3 consecutive wins/losses) depend on
   `win_streak`/`loss_streak` state on `TradingManager`, which likewise only
-  builds up across repeated checks on one instance.
+  builds up across repeated checks on one instance. As of 2026-07-09 these
+  streaks update only when the scanner actually closes a position
+  (`trader.py: _record_trade_outcome`, called from `scan_and_execute`'s sell
+  branch) — not from the concurrent unrealized P&L direction of whatever's
+  currently open, which used to let two correlated positions dipping
+  together for a few hourly checks count as a 3-loss streak.
 
 Both now work as intended on the VPS, since `run_server.py` keeps a single
 `TradingManager` alive for the life of the service.

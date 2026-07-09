@@ -231,40 +231,45 @@ class TradingManager:
             logger.error(f"Error adjusting strategy: {e}")
             return {'error': str(e)}
     
+    def _record_trade_outcome(self, symbol: str, pnl: float):
+        """Update win/loss streak from a single closed trade's realized P&L.
+
+        Streaks are driven by actual closed trades, not by the concurrent
+        unrealized P&L direction of whatever happens to be open — two
+        correlated positions dipping together for a few hourly checks isn't
+        a losing streak, it's one market move.
+        """
+        if pnl > 0:
+            self.win_streak += 1
+            self.loss_streak = 0
+        elif pnl < 0:
+            self.loss_streak += 1
+            self.win_streak = 0
+        self.trade_history.append({'symbol': symbol, 'pnl': pnl, 'timestamp': _now()})
+
     def analyze_performance(self) -> Dict:
-        """Analyze trading performance and streaks"""
+        """Snapshot of current unrealized P&L plus the closed-trade win/loss streak"""
         try:
             positions = self.client.get_positions()
             account = self.client.get_account()
-            
+
             total_pnl = 0
-            winning_trades = 0
-            losing_trades = 0
-            
+            winning_positions = 0
+            losing_positions = 0
+
             for position in positions:
                 pnl = float(position.get('unrealized_pl', 0))
                 total_pnl += pnl
-                
+
                 if pnl > 0:
-                    winning_trades += 1
+                    winning_positions += 1
                 elif pnl < 0:
-                    losing_trades += 1
-            
-            # Update streaks (simplified - based on current session)
-            if winning_trades > losing_trades and losing_trades == 0:
-                self.win_streak += 1
-                self.loss_streak = 0
-            elif losing_trades > winning_trades and winning_trades == 0:
-                self.loss_streak += 1
-                self.win_streak = 0
-            else:
-                self.win_streak = 0
-                self.loss_streak = 0
-            
+                    losing_positions += 1
+
             return {
                 'total_pnl': total_pnl,
-                'winning_positions': winning_trades,
-                'losing_positions': losing_trades,
+                'winning_positions': winning_positions,
+                'losing_positions': losing_positions,
                 'win_streak': self.win_streak,
                 'loss_streak': self.loss_streak,
                 'current_equity': account.get('equity'),
@@ -319,9 +324,12 @@ class TradingManager:
 
             elif signal == 'sell' and symbol in current_symbols:
                 try:
+                    position = next((p for p in positions if p['symbol'] == symbol), None)
                     self.client.close_position(symbol)
                     executed.append({'side': 'sell', 'symbol': symbol, 'reason': sig['reason']})
                     logger.info(f"[SCANNER] SELL {symbol} — {sig['reason']}")
+                    if position is not None:
+                        self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
