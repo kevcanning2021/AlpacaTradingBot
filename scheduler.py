@@ -12,10 +12,7 @@ from config.settings import (
     MARKET_OPEN_MINUTE,
     MARKET_CLOSE_HOUR,
     MARKET_CLOSE_MINUTE,
-    TIMEZONE,
-    REPORT_TIMEZONE,
-    DAILY_REPORT_HOUR,
-    DAILY_REPORT_MINUTE
+    TIMEZONE
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -131,10 +128,10 @@ class MarketHoursScheduler:
             )
 
             daily_trigger = CronTrigger(
-                hour=DAILY_REPORT_HOUR,
-                minute=DAILY_REPORT_MINUTE,
+                hour=MARKET_OPEN_HOUR,
+                minute=MARKET_OPEN_MINUTE,
                 day_of_week='mon-fri',
-                timezone=REPORT_TIMEZONE
+                timezone=TIMEZONE
             )
             self.scheduler.add_job(
                 self._send_daily_report_job,
@@ -150,7 +147,7 @@ class MarketHoursScheduler:
             logger.info(f"Market Hours Scheduler started")
             logger.info(f"Market hours: {MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} - {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} ET")
             logger.info(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes (Mon-Fri only)")
-            logger.info(f"Daily report: {DAILY_REPORT_HOUR:02d}:{DAILY_REPORT_MINUTE:02d} {REPORT_TIMEZONE} (Mon-Fri)")
+            logger.info(f"Daily report: at market open ({MARKET_OPEN_HOUR:02d}:{MARKET_OPEN_MINUTE:02d} {TIMEZONE}, Mon-Fri)")
             logger.info("=" * 60)
         
         except Exception as e:
