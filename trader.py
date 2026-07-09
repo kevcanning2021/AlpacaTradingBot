@@ -98,16 +98,27 @@ class TradingManager:
                 report['actions_taken'].append(action)
                 logger.info(f"[{symbol}] Position up {round(pnl_pct * 100, 2)}% - Stop loss adjustment recommended")
             
-            # If position is down at or below current stop loss threshold, alert
+            # If position is down at or below current stop loss threshold, close it
             elif pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
-                action = {
-                    'action': 'STOP_LOSS_ALERT',
-                    'symbol': symbol,
-                    'pnl_pct': round(pnl_pct * 100, 2),
-                    'recommendation': f'Position is down {round(abs(pnl_pct) * 100, 2)}%. Review stop loss level.'
-                }
+                try:
+                    self.client.close_position(symbol)
+                    self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
+                    action = {
+                        'action': 'STOP_LOSS_TRIGGERED',
+                        'symbol': symbol,
+                        'pnl_pct': round(pnl_pct * 100, 2),
+                        'recommendation': f'Position was down {round(abs(pnl_pct) * 100, 2)}%. Closed automatically.'
+                    }
+                    logger.warning(f"[{symbol}] Position down {round(abs(pnl_pct) * 100, 2)}% - closed automatically (stop loss)")
+                except Exception as close_error:
+                    action = {
+                        'action': 'STOP_LOSS_ALERT',
+                        'symbol': symbol,
+                        'pnl_pct': round(pnl_pct * 100, 2),
+                        'recommendation': f'Position is down {round(abs(pnl_pct) * 100, 2)}%. Automatic close FAILED: {close_error}'
+                    }
+                    logger.error(f"[{symbol}] Stop loss close failed: {close_error}")
                 report['actions_taken'].append(action)
-                logger.warning(f"[{symbol}] Position down {round(abs(pnl_pct) * 100, 2)}% - Stop loss review recommended")
         
         except Exception as e:
             report['errors'].append(f"Error handling stop loss for {symbol}: {e}")

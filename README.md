@@ -107,7 +107,7 @@ Exiting...
 ## Notes
 
 - The scheduler runs in the background and monitors positions during market hours
-- Stop-loss/re-entry outputs are recommendations only, reviewed via the CLI — but the opportunity scanner (`scan_and_execute`) **automatically places buy/sell orders** on its signals with no manual approval step, subject to the guard conditions in `trader.py` (already-held symbol, `MAX_POSITIONS`, buying power)
+- The opportunity scanner (`scan_and_execute`) **automatically places buy/sell orders** on its signals with no manual approval step, subject to the guard conditions in `trader.py` (already-held symbol, `MAX_POSITIONS`, buying power). Re-entry suggestions are recommendations only, reviewed via the CLI — but as of 2026-07-09, the stop-loss threshold (`_handle_stop_loss`) **automatically closes the position** when it's breached, rather than just alerting.
 - The bot uses Alpaca's paper trading API by default (set in `.env`)
 - Position history is kept for the last 100 checks
 
