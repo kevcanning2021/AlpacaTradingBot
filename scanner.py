@@ -32,7 +32,9 @@ class OpportunityScanner:
     """Scans a watchlist for EMA crossover + RSI signals and returns trade recommendations."""
 
     BUY_RSI_MAX = 65   # Don't buy into overbought conditions
-    SELL_RSI_MIN = 75  # Exit overbought positions
+    SELL_RSI_MIN = 85  # Exit overbought positions — RSI routinely sits >75 for weeks during a
+                       # real rally, so 75 exited winners days after entry; 85 still catches
+                       # genuine blow-off tops without cutting sustained trends short.
 
     def __init__(self, client):
         self.client = client
