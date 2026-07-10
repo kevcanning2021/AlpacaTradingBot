@@ -16,7 +16,7 @@ MARKET_CLOSE_HOUR = 16
 MARKET_CLOSE_MINUTE = 0
 
 # Trading Parameters
-CHECK_INTERVAL_MINUTES = 60  # Check positions every 60 minutes (once per hour)
+CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
 STOP_LOSS_THRESHOLD = 0.05  # Adjust stops when position moves 5%
 REENTRY_THRESHOLD = 0.05    # Re-enter when pullback is 5%
 
