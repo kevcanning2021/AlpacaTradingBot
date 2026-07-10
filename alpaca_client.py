@@ -4,7 +4,11 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
-from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, DATA_BASE_URL
+import pytz
+from config.settings import (
+    ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, DATA_BASE_URL,
+    TIMEZONE, MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +137,22 @@ class AlpacaClient:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode())
                 bars = data.get('bars') or []
+                if bars and self._is_bar_still_forming(bars[-1]):
+                    bars = bars[:-1]
                 return bars[-limit:]
         except Exception as e:
             logger.error(f"[get_bars] Failed to fetch bars for {symbol}: {e}")
             return []
+
+    @staticmethod
+    def _is_bar_still_forming(bar: Dict) -> bool:
+        """A daily bar dated today isn't final until the market closes — until then its
+        OHLC keeps shifting with the current price, which would make EMA/RSI crossover
+        signals appear and disappear as the session progresses."""
+        tz = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz)
+        bar_date = datetime.fromisoformat(bar['t'].replace('Z', '+00:00')).astimezone(tz).date()
+        if bar_date != now.date():
+            return False
+        market_close = now.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0)
+        return now < market_close
