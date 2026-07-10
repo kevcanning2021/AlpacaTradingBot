@@ -19,6 +19,12 @@ MARKET_CLOSE_MINUTE = 0
 CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
 STOP_LOSS_THRESHOLD = 0.05  # Adjust stops when position moves 5%
 REENTRY_THRESHOLD = 0.05    # Re-enter when pullback is 5%
+# Separate from STOP_LOSS_THRESHOLD: a flat 5% pullback-from-peak triggered too often on
+# normal volatility in an intact uptrend (backtested watchlist, 90 daily bars, 2026-07-10 —
+# NVDA alone false-tripped 4x while EMA9>EMA21 and RSI<85), undercutting the RSI-85 change's
+# goal of letting winners run. 8% cut most single-name false trips while still catching real
+# breakdowns.
+TRAILING_STOP_THRESHOLD = 0.08
 
 # Timezone
 TIMEZONE = 'US/Eastern'  # Market hours are always NYSE/NASDAQ hours (ET), regardless of server location

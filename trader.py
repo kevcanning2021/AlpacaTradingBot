@@ -139,12 +139,14 @@ class TradingManager:
             return False
 
     def _handle_trailing_stop(self, symbol: str, position: Dict, report: Dict) -> bool:
-        """Close a position if it has pulled back STOP_LOSS_THRESHOLD from its peak price.
+        """Close a position if it has pulled back TRAILING_STOP_THRESHOLD from its peak price.
 
         Separate from _handle_reentry's pullback-from-peak check below, which is an
         advisory add-to-position suggestion on REENTRY_THRESHOLD, not a sell — this
-        is the downside-protection counterpart, using STOP_LOSS_THRESHOLD, since the
-        entry-anchored stop loss above can't see gains a position has given back.
+        is the downside-protection counterpart, using TRAILING_STOP_THRESHOLD (wider than
+        the entry-anchored STOP_LOSS_THRESHOLD) since the entry-anchored stop loss above
+        can't see gains a position has given back, and a peak-relative stop needs more
+        room than an entry-relative one to avoid closing on ordinary volatility.
         Returns True if the position was closed.
         """
         try:
@@ -154,7 +156,7 @@ class TradingManager:
                 return False
 
             pullback_pct = (peak_price - current_price) / peak_price
-            if pullback_pct < settings.STOP_LOSS_THRESHOLD:
+            if pullback_pct < settings.TRAILING_STOP_THRESHOLD:
                 return False
 
             try:

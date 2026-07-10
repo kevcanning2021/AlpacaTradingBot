@@ -54,7 +54,8 @@ python main.py
 
 Edit `config/settings.py` (or set via `.env`) to customize:
 - `CHECK_INTERVAL_MINUTES`: How often to check positions (default: 60)
-- `STOP_LOSS_THRESHOLD`: Percentage threshold for stop loss alerts (default: 5%)
+- `STOP_LOSS_THRESHOLD`: Percentage threshold for the entry-anchored stop loss (default: 5%)
+- `TRAILING_STOP_THRESHOLD`: Percentage pullback from peak price for the trailing stop (default: 8%)
 - `REENTRY_THRESHOLD`: Percentage pullback for re-entry suggestions (default: 5%)
 - `MARKET_OPEN_HOUR/MINUTE`: Market opening time (default: 9:30 AM ET)
 - `MARKET_CLOSE_HOUR/MINUTE`: Market closing time (default: 4:00 PM ET)
