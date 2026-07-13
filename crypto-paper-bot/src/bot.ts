@@ -5,6 +5,7 @@ import { loadState } from "./state";
 import { logEvent } from "./log";
 import { readLedger, readLearnings } from "./memory";
 import { checkSkip } from "./adaptiveFilter";
+import { sendWhatsApp } from "./notify";
 import { BotConfig } from "./types";
 
 // Order placement (Alpaca MCP, paper account) is still not wired up —
@@ -22,23 +23,46 @@ export async function runScan(config: BotConfig): Promise<void> {
     )} ema${config.slowLength}=${decision.slowMA.toFixed(2)} signal=${decision.signal}`
   );
 
+  let alert: { subject: string; body: string } | null = null;
+
   if (decision.signal === "BUY") {
     const setupKey = `ema${config.fastLength}-${config.slowLength}`;
     const check = checkSkip(config.symbol, setupKey, readLedger(), readLearnings());
     if (check.skip) {
       console.log(`[decision] SKIP ${config.symbol} — ${check.reason}`);
       logEvent(`Scan decision: SKIP ${config.symbol} - ${check.reason}`);
+      alert = { subject: `crypto-paper-bot SKIP: ${config.symbol}`, body: check.reason };
     } else {
       const risk = applyRisk(decision, state, state.equityBaseline || decision.price, config);
       const line = `${risk.approved ? "APPROVED" : "BLOCKED"} ${risk.signal} - ${risk.reason}`;
       console.log(`[decision] ${line}`);
       logEvent(`Scan decision: ${line}`);
+      if (risk.approved) {
+        alert = {
+          subject: `crypto-paper-bot BUY signal: ${config.symbol}`,
+          body: `${risk.reason}\nPrice: $${decision.price}\n(Analysis-only — no order placed.)`,
+        };
+      }
     }
   } else if (decision.signal === "SELL") {
     const risk = applyRisk(decision, state, state.equityBaseline || decision.price, config);
     const line = `${risk.approved ? "APPROVED" : "BLOCKED"} ${risk.signal} - ${risk.reason}`;
     console.log(`[decision] ${line}`);
     logEvent(`Scan decision: ${line}`);
+    if (risk.approved) {
+      alert = {
+        subject: `crypto-paper-bot SELL signal: ${config.symbol}`,
+        body: `${risk.reason}\nPrice: $${decision.price}\n(Analysis-only — no order placed.)`,
+      };
+    }
+  }
+
+  if (alert) {
+    try {
+      await sendWhatsApp(alert.subject, alert.body);
+    } catch (err) {
+      console.error(`[whatsapp] Failed to send alert: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   console.log(

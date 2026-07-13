@@ -43,6 +43,16 @@ then `replay:memory` to see it actually skip a repeat of a real losing
 setup. Run `memory:reset` any time you want to start the learning
 history over from nothing.
 
+## Optional WhatsApp alerts
+
+`scan` can send a WhatsApp message via CallMeBot — the same service and
+env vars (`WHATSAPP_ENABLED`, `WHATSAPP_PHONE`, `WHATSAPP_APIKEY`) as the
+Python bots' `WhatsAppNotifier`, so an existing CallMeBot registration
+works here with no new signup. Off by default; set the three vars in
+`.env` to turn it on. It only fires on a SKIP or an approved BUY/SELL
+signal — never on a plain HOLD — and never places an order either way.
+A failed send is logged and swallowed, it never crashes the scan.
+
 ## How paper/local execution works
 
 Nothing in this repo places an order anywhere, paper or live. `scan` and
