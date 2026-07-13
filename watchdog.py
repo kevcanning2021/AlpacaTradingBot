@@ -27,6 +27,12 @@ ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 # Orders already investigated and confirmed not to be bugs — don't re-flag them.
 KNOWN_MANUAL_ORDER_IDS = {
     'e9b313b1-7668-45f2-8544-b7bb0cc83cd2',  # 2026-07-10 rebalance, placed manually from dev machine
+    '47a7e888-f544-4533-a471-8c1bdb05b7b4',  # 2026-07-13 accidental AAPL close_position() call
+                                              # while unit-testing threshold logic from dev machine
+                                              # against the real client instead of a stub — see
+                                              # project memory Lesson #7. +1.7% gain, no harm; not a
+                                              # bot trade, so trader.py's streak tracking correctly
+                                              # never saw it.
 }
 
 
