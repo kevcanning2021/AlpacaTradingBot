@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Dict
 import pytz
-from alpaca_client import AlpacaClient
+from alpaca_client import AlpacaClient, position_symbol
 from config import settings
 from whatsapp_notifier import WhatsAppNotifier
 from scanner import OpportunityScanner
@@ -356,16 +356,31 @@ class TradingManager:
             logger.error(f"Error analyzing performance: {e}")
             return {'error': str(e)}
 
-    def scan_and_execute(self) -> Dict:
-        """Scan the watchlist for opportunities and execute buy/sell orders."""
+    def scan_and_execute(self, watchlist=None, position_size_usd=None, max_positions=None) -> Dict:
+        """Scan a watchlist for opportunities and execute buy/sell orders.
+
+        Defaults to the stock watchlist/sizing; pass settings.CRYPTO_WATCHLIST etc.
+        to run the same logic against crypto instead.
+        """
+        watchlist = watchlist if watchlist is not None else settings.WATCHLIST
+        position_size_usd = position_size_usd if position_size_usd is not None else settings.POSITION_SIZE_USD
+        max_positions = max_positions if max_positions is not None else settings.MAX_POSITIONS
+
         scanner = OpportunityScanner(self.client)
-        signals = scanner.scan(settings.WATCHLIST)
+        signals = scanner.scan(watchlist)
 
         try:
-            positions = self.client.get_positions()
+            all_positions = self.client.get_positions()
             account = self.client.get_account()
         except Exception as e:
             return {'timestamp': _now(), 'error': str(e), 'signals': signals, 'executed': [], 'errors': [str(e)]}
+
+        # Crypto and stock orders/positions use different symbol formats (BTC/USD vs
+        # BTCUSD) and should be capped independently, so scope everything below to the
+        # asset class this watchlist actually represents.
+        is_crypto = any('/' in s for s in watchlist)
+        asset_class = 'crypto' if is_crypto else 'us_equity'
+        positions = [p for p in all_positions if p.get('asset_class') == asset_class]
 
         current_symbols = {p['symbol'] for p in positions}
         buying_power = float(account.get('buying_power', 0))
@@ -376,18 +391,19 @@ class TradingManager:
             symbol = sig['symbol']
             signal = sig['signal']
             price = float(sig.get('price', 0))
+            pos_symbol = position_symbol(symbol)
 
             if signal == 'buy':
-                if symbol in current_symbols:
+                if pos_symbol in current_symbols:
                     continue
                 pending_buys = sum(1 for e in executed if e['side'] == 'buy')
-                if len(positions) + pending_buys >= settings.MAX_POSITIONS:
-                    logger.info(f"[SCANNER] Skipping {symbol} buy — max positions ({settings.MAX_POSITIONS}) reached")
+                if len(positions) + pending_buys >= max_positions:
+                    logger.info(f"[SCANNER] Skipping {symbol} buy — max positions ({max_positions}) reached")
                     continue
-                if price <= 0 or buying_power < settings.POSITION_SIZE_USD:
+                if price <= 0 or buying_power < position_size_usd:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
                     continue
-                notional = round(settings.POSITION_SIZE_USD, 2)
+                notional = round(position_size_usd, 2)
                 try:
                     order = self.client.create_order(symbol, side='buy', notional=notional)
                     qty = round(notional / price, 4)
@@ -398,22 +414,22 @@ class TradingManager:
                     errors.append(f"Buy {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to buy {symbol}: {e}")
 
-            elif signal == 'sell' and symbol in current_symbols:
+            elif signal == 'sell' and pos_symbol in current_symbols:
                 try:
-                    position = next((p for p in positions if p['symbol'] == symbol), None)
-                    self.client.close_position(symbol)
+                    position = next((p for p in positions if p['symbol'] == pos_symbol), None)
+                    self.client.close_position(pos_symbol)
                     executed.append({'side': 'sell', 'symbol': symbol, 'reason': sig['reason']})
                     logger.info(f"[SCANNER] SELL {symbol} — {sig['reason']}")
                     if position is not None:
-                        self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
-                    self.position_peak_prices.pop(symbol, None)
+                        self._record_trade_outcome(pos_symbol, float(position.get('unrealized_pl', 0)))
+                    self.position_peak_prices.pop(pos_symbol, None)
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
 
         result = {
             'timestamp': _now(),
-            'watchlist': settings.WATCHLIST,
+            'watchlist': watchlist,
             'signals': signals,
             'executed': executed,
             'errors': errors,

@@ -8,6 +8,7 @@ ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY', '')
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets/v2'
 DATA_BASE_URL = 'https://data.alpaca.markets/v2'
+CRYPTO_DATA_BASE_URL = 'https://data.alpaca.markets/v1beta3/crypto/us'
 
 # Market Hours (ET)
 MARKET_OPEN_HOUR = 9
@@ -39,6 +40,12 @@ INITIAL_EQUITY = float(os.getenv('INITIAL_EQUITY', '100000'))
 WATCHLIST = [s.strip() for s in os.getenv('WATCHLIST', 'AAPL,MSFT,GOOGL,AMZN,NVDA,SPY,QQQ').split(',') if s.strip()]
 POSITION_SIZE_USD = float(os.getenv('POSITION_SIZE_USD', '1000'))  # Dollar amount per new position
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '5'))               # Max concurrent open positions
+
+# Crypto Scanner (runs 24/7, independent of stock market hours — see scheduler.py)
+CRYPTO_WATCHLIST = [s.strip() for s in os.getenv('CRYPTO_WATCHLIST', 'BTC/USD,ETH/USD').split(',') if s.strip()]
+CRYPTO_CHECK_INTERVAL_MINUTES = int(os.getenv('CRYPTO_CHECK_INTERVAL_MINUTES', '60'))
+CRYPTO_POSITION_SIZE_USD = float(os.getenv('CRYPTO_POSITION_SIZE_USD', '500'))
+CRYPTO_MAX_POSITIONS = int(os.getenv('CRYPTO_MAX_POSITIONS', '2'))
 
 # WhatsApp Notifications (via CallMeBot)
 WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'

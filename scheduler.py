@@ -12,7 +12,11 @@ from config.settings import (
     MARKET_OPEN_MINUTE,
     MARKET_CLOSE_HOUR,
     MARKET_CLOSE_MINUTE,
-    TIMEZONE
+    TIMEZONE,
+    CRYPTO_WATCHLIST,
+    CRYPTO_CHECK_INTERVAL_MINUTES,
+    CRYPTO_POSITION_SIZE_USD,
+    CRYPTO_MAX_POSITIONS,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -93,6 +97,40 @@ class MarketHoursScheduler:
         except Exception as e:
             logger.error(f"Error in position check job: {e}")
 
+    def _check_crypto_job(self):
+        """Job that runs every CRYPTO_CHECK_INTERVAL_MINUTES, around the clock — crypto
+        trades 24/7 so this job is not gated by _is_market_open()."""
+        logger.info("=" * 60)
+        logger.info("Starting crypto position check and opportunity scan...")
+
+        try:
+            scan_report = self.trading_manager.scan_and_execute(
+                CRYPTO_WATCHLIST, CRYPTO_POSITION_SIZE_USD, CRYPTO_MAX_POSITIONS
+            )
+            if scan_report.get('executed'):
+                logger.info(f"Crypto scanner executed {len(scan_report['executed'])} trade(s):")
+                for trade in scan_report['executed']:
+                    qty_str = f"{trade['qty']} " if trade.get('qty') else ''
+                    logger.info(f"  {trade['side'].upper()} {qty_str}{trade['symbol']} — {trade['reason']}")
+            if scan_report.get('errors'):
+                logger.warning(f"Crypto scanner errors: {scan_report['errors']}")
+
+            # Apply stop-loss/trailing-stop/re-entry logic to all open positions
+            # (including crypto), since check_positions() isn't market-hours gated.
+            report = self.trading_manager.check_positions()
+            report['scan_report'] = scan_report
+
+            logger.info(f"Crypto check completed at {report.get('timestamp')}")
+            if report.get('actions_taken'):
+                logger.info(f"Actions: {len(report['actions_taken'])} recommendation(s)")
+                for action in report['actions_taken']:
+                    logger.info(f"  - {action.get('action')}: {action.get('symbol')} - {action.get('recommendation')}")
+            if report.get('errors'):
+                logger.warning(f"Errors: {report['errors']}")
+
+        except Exception as e:
+            logger.error(f"Error in crypto position check job: {e}")
+
     def _send_daily_report_job(self):
         """Job that emails a daily account status report."""
         logger.info("=" * 60)
@@ -127,6 +165,15 @@ class MarketHoursScheduler:
                 replace_existing=True
             )
 
+            crypto_trigger = IntervalTrigger(minutes=CRYPTO_CHECK_INTERVAL_MINUTES, timezone=TIMEZONE)
+            self.scheduler.add_job(
+                self._check_crypto_job,
+                trigger=crypto_trigger,
+                id='crypto_position_check',
+                name='24/7 Crypto Position Check',
+                replace_existing=True
+            )
+
             daily_trigger = CronTrigger(
                 hour=MARKET_OPEN_HOUR,
                 minute=MARKET_OPEN_MINUTE,
@@ -147,6 +194,7 @@ class MarketHoursScheduler:
             logger.info(f"Market Hours Scheduler started")
             logger.info(f"Market hours: {MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} - {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} ET")
             logger.info(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes (Mon-Fri only)")
+            logger.info(f"Crypto watchlist: {CRYPTO_WATCHLIST} — checked every {CRYPTO_CHECK_INTERVAL_MINUTES} minutes, 24/7")
             logger.info(f"Daily report: at market open ({MARKET_OPEN_HOUR:02d}:{MARKET_OPEN_MINUTE:02d} {TIMEZONE}, Mon-Fri)")
             logger.info("=" * 60)
         

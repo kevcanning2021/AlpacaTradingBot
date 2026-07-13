@@ -62,6 +62,10 @@ Edit `config/settings.py` (or set via `.env`) to customize:
 - `WATCHLIST`: Comma-separated symbols the opportunity scanner scans (default: `AAPL,MSFT,GOOGL,AMZN,NVDA,SPY,QQQ`)
 - `POSITION_SIZE_USD`: Dollar amount bought per new scanner position, as a notional (fractional-share) order — works at any account size and any share price (default: 1000)
 - `MAX_POSITIONS`: Max concurrent open positions the scanner will hold (default: 5)
+- `CRYPTO_WATCHLIST`: Comma-separated crypto pairs scanned 24/7, independent of stock market hours (default: `BTC/USD,ETH/USD`)
+- `CRYPTO_CHECK_INTERVAL_MINUTES`: How often to run the crypto scan/position check, around the clock (default: 60)
+- `CRYPTO_POSITION_SIZE_USD`: Dollar amount bought per new crypto position (default: 500)
+- `CRYPTO_MAX_POSITIONS`: Max concurrent open crypto positions (default: 2, tracked separately from stock `MAX_POSITIONS`)
 
 ## Architecture
 
