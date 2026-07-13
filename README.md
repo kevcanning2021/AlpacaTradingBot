@@ -66,6 +66,8 @@ Edit `config/settings.py` (or set via `.env`) to customize:
 - `CRYPTO_CHECK_INTERVAL_MINUTES`: How often to run the crypto scan/position check, around the clock (default: 60)
 - `CRYPTO_POSITION_SIZE_USD`: Dollar amount bought per new crypto position (default: 500)
 - `CRYPTO_MAX_POSITIONS`: Max concurrent open crypto positions (default: 2, tracked separately from stock `MAX_POSITIONS`)
+- `CRYPTO_STOP_LOSS_THRESHOLD`: Entry-anchored stop-loss threshold for crypto positions, separate from `STOP_LOSS_THRESHOLD` since crypto's ordinary volatility is far wider than stocks (default: 15%)
+- `CRYPTO_TRAILING_STOP_THRESHOLD`: Peak-relative trailing-stop threshold for crypto positions, separate from `TRAILING_STOP_THRESHOLD` for the same reason (default: 20%)
 
 ## Architecture
 

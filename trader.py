@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 import pytz
 from alpaca_client import AlpacaClient, position_symbol
 from config import settings
@@ -29,10 +29,20 @@ class TradingManager:
         self.win_streak = 0              # Current winning streak
         self.loss_streak = 0             # Current losing streak
     
-    def check_positions(self) -> Dict:
-        """Check all open positions and apply trading logic"""
+    def check_positions(self, asset_class: Optional[str] = None) -> Dict:
+        """Check all open positions and apply trading logic.
+
+        Pass asset_class='crypto' or 'us_equity' to restrict which positions get
+        evaluated. The always-on crypto job needs this scoped to 'crypto' — Alpaca
+        queues a stock market order submitted outside trading hours as a next-session
+        day order, so an unscoped call would let a stale overnight price trip a stock's
+        5%/8% stop and realize whatever the next open's gap turns out to be, instead of
+        actually capping the loss at that threshold.
+        """
         try:
             positions = self.client.get_positions()
+            if asset_class is not None:
+                positions = [p for p in positions if p.get('asset_class') == asset_class]
             account = self.client.get_account()
             
             report = {
@@ -91,10 +101,16 @@ class TradingManager:
             return {'error': str(e), 'timestamp': _now()}
     
     def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict) -> bool:
-        """Handle stop loss adjustments at 5% threshold. Returns True if the position was closed."""
+        """Handle stop loss adjustments at the entry-anchored threshold. Returns True if closed.
+
+        Crypto uses its own, wider CRYPTO_STOP_LOSS_THRESHOLD instead of STOP_LOSS_THRESHOLD —
+        see the backtest note next to CRYPTO_STOP_LOSS_THRESHOLD in config/settings.py for why
+        the stock-tuned 5% is far too tight for crypto's ordinary volatility.
+        """
         try:
+            threshold = settings.CRYPTO_STOP_LOSS_THRESHOLD if position.get('asset_class') == 'crypto' else settings.STOP_LOSS_THRESHOLD
             # If position is up at or above current stop loss threshold, consider tightening stop
-            if pnl_pct >= settings.STOP_LOSS_THRESHOLD:
+            if pnl_pct >= threshold:
                 action = {
                     'action': 'STOP_LOSS_CANDIDATE',
                     'symbol': symbol,
@@ -106,7 +122,7 @@ class TradingManager:
                 return False
 
             # If position is down at or below current stop loss threshold, close it
-            elif pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
+            elif pnl_pct <= -threshold:
                 closed = False
                 try:
                     self.client.close_position(symbol)
@@ -147,16 +163,21 @@ class TradingManager:
         the entry-anchored STOP_LOSS_THRESHOLD) since the entry-anchored stop loss above
         can't see gains a position has given back, and a peak-relative stop needs more
         room than an entry-relative one to avoid closing on ordinary volatility.
+
+        Crypto uses its own, wider CRYPTO_TRAILING_STOP_THRESHOLD instead of
+        TRAILING_STOP_THRESHOLD — see the backtest note next to CRYPTO_TRAILING_STOP_THRESHOLD
+        in config/settings.py for why the stock-tuned 8% is far too tight for crypto.
         Returns True if the position was closed.
         """
         try:
+            threshold = settings.CRYPTO_TRAILING_STOP_THRESHOLD if position.get('asset_class') == 'crypto' else settings.TRAILING_STOP_THRESHOLD
             peak_price = self.position_peak_prices.get(symbol, 0)
             current_price = float(position.get('current_price', 0))
             if peak_price <= 0:
                 return False
 
             pullback_pct = (peak_price - current_price) / peak_price
-            if pullback_pct < settings.TRAILING_STOP_THRESHOLD:
+            if pullback_pct < threshold:
                 return False
 
             try:

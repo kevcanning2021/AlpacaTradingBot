@@ -115,9 +115,11 @@ class MarketHoursScheduler:
             if scan_report.get('errors'):
                 logger.warning(f"Crypto scanner errors: {scan_report['errors']}")
 
-            # Apply stop-loss/trailing-stop/re-entry logic to all open positions
-            # (including crypto), since check_positions() isn't market-hours gated.
-            report = self.trading_manager.check_positions()
+            # Apply stop-loss/trailing-stop/re-entry logic to crypto positions only —
+            # this job isn't market-hours gated, but stock positions already get
+            # checked by the market-hours job and must not be touched here (see
+            # check_positions() docstring for why an unscoped call is unsafe).
+            report = self.trading_manager.check_positions(asset_class='crypto')
             report['scan_report'] = scan_report
 
             logger.info(f"Crypto check completed at {report.get('timestamp')}")

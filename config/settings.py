@@ -46,6 +46,15 @@ CRYPTO_WATCHLIST = [s.strip() for s in os.getenv('CRYPTO_WATCHLIST', 'BTC/USD,ET
 CRYPTO_CHECK_INTERVAL_MINUTES = int(os.getenv('CRYPTO_CHECK_INTERVAL_MINUTES', '60'))
 CRYPTO_POSITION_SIZE_USD = float(os.getenv('CRYPTO_POSITION_SIZE_USD', '500'))
 CRYPTO_MAX_POSITIONS = int(os.getenv('CRYPTO_MAX_POSITIONS', '2'))
+# Separate from STOP_LOSS_THRESHOLD/TRAILING_STOP_THRESHOLD: those were backtested only
+# against the stock watchlist. Backtested against 100 real BTC/USD & ETH/USD daily bars
+# (2026-04-04 to 2026-07-12, 2026-07-13) — the stock-tuned 8% trailing-stop would have
+# tripped on ordinary volatility alone in 50-58% of all possible 20-day holding windows
+# (vs. NVDA's occasional false trip that motivated 8% for stocks in the first place).
+# 20%/15% cuts that to 8-16% of windows, a comparable reduction to what 8% achieved over
+# the stock-tuned 5% — still not zero false trips, same "cut most, not all" philosophy.
+CRYPTO_STOP_LOSS_THRESHOLD = float(os.getenv('CRYPTO_STOP_LOSS_THRESHOLD', '0.15'))
+CRYPTO_TRAILING_STOP_THRESHOLD = float(os.getenv('CRYPTO_TRAILING_STOP_THRESHOLD', '0.20'))
 
 # WhatsApp Notifications (via CallMeBot)
 WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'
