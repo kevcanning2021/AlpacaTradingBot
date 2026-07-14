@@ -147,50 +147,87 @@ class AlpacaClient:
         bars by symbol in the response instead of returning a flat list.
         """
         is_crypto = '/' in symbol
-        start = (datetime.now(timezone.utc) - timedelta(days=limit * 3)).strftime('%Y-%m-%d')
+        if timeframe == '1Day':
+            lookback_days = limit * 3  # slack for weekends/holidays
+        else:
+            # Intraday bars only accrue during trading hours (crypto: 24/day, stocks:
+            # ~7 hourly bars/day) -- limit*3 calendar days would compute a start date
+            # years in the past for a few hundred bars, and get_bars doesn't paginate,
+            # so the single API page would return stale data starting from that date
+            # and never reach anything recent.
+            bars_per_day = 24 if is_crypto else 7
+            lookback_days = max(int(limit / bars_per_day * 2.5) + 5, 5)
+        start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
         if is_crypto:
-            url = (
+            base_url = (
                 f'{CRYPTO_DATA_BASE_URL}/bars'
                 f'?symbols={quote(symbol, safe="")}&timeframe={timeframe}&start={start}&limit=10000&sort=asc'
             )
         else:
-            url = (
+            base_url = (
                 f'{DATA_BASE_URL}/stocks/{symbol}/bars'
                 f'?timeframe={timeframe}&start={start}&limit=10000&feed=iex&sort=asc'
             )
-        req = urllib.request.Request(url)
-        req.add_header('APCA-API-KEY-ID', self.api_key)
-        req.add_header('APCA-API-SECRET-KEY', self.secret_key)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode())
+            # Alpaca paginates bars regardless of the requested `limit` (observed:
+            # ~200 hourly bars per page even with limit=10000) and returns a
+            # next_page_token when more are available. Without following it, a
+            # request needing more bars than one page holds would silently return
+            # a stale chunk starting from `start` and never reach recent data.
+            all_bars = []
+            page_token = None
+            for _ in range(50):  # safety cap against unexpected infinite pagination
+                page_url = base_url + (f'&page_token={quote(page_token, safe="")}' if page_token else '')
+                req = urllib.request.Request(page_url)
+                req.add_header('APCA-API-KEY-ID', self.api_key)
+                req.add_header('APCA-API-SECRET-KEY', self.secret_key)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
                 if is_crypto:
-                    bars = (data.get('bars') or {}).get(symbol) or []
+                    page_bars = (data.get('bars') or {}).get(symbol) or []
                 else:
-                    bars = data.get('bars') or []
-                if bars and self._is_bar_still_forming(bars[-1], is_crypto):
-                    bars = bars[:-1]
-                return bars[-limit:]
+                    page_bars = data.get('bars') or []
+                all_bars.extend(page_bars)
+                page_token = data.get('next_page_token')
+                if not page_token:
+                    break
+                # Bars come back oldest-first (sort=asc), so we can only stop early once
+                # we're sure the *oldest* excess is what's being discarded, not the most
+                # recent bars we actually want -- must paginate to completion.
+
+            if all_bars and self._is_bar_still_forming(all_bars[-1], is_crypto, timeframe):
+                all_bars = all_bars[:-1]
+            return all_bars[-limit:]
         except Exception as e:
             logger.error(f"[get_bars] Failed to fetch bars for {symbol}: {e}")
             return []
 
     @staticmethod
-    def _is_bar_still_forming(bar: Dict, is_crypto: bool = False) -> bool:
-        """A daily bar dated today isn't final until its trading day ends — until then its
-        OHLC keeps shifting with the current price, which would make EMA/RSI crossover
-        signals appear and disappear as the session progresses.
+    def _is_bar_still_forming(bar: Dict, is_crypto: bool = False, timeframe: str = '1Day') -> bool:
+        """A bar dated today/this period isn't final until that period ends — until then
+        its OHLC keeps shifting with the current price, which would make EMA/RSI
+        crossover signals appear and disappear as the period progresses.
 
         Crypto trades 24/7 with no market close, so its daily bar rolls over at UTC
-        midnight instead of the stock market's 4pm ET close.
+        midnight instead of the stock market's 4pm ET close. Intraday bars (e.g. '1Hour')
+        are simple fixed-duration windows regardless of asset class, so they use an
+        elapsed-time check instead of the daily market-close logic below.
         """
+        bar_start = datetime.fromisoformat(bar['t'].replace('Z', '+00:00')).astimezone(timezone.utc)
+
+        intraday_durations = {'1Min': timedelta(minutes=1), '5Min': timedelta(minutes=5),
+                               '15Min': timedelta(minutes=15), '30Min': timedelta(minutes=30),
+                               '1Hour': timedelta(hours=1)}
+        if timeframe in intraday_durations:
+            return bar_start + intraday_durations[timeframe] > datetime.now(timezone.utc)
+
         if is_crypto:
-            bar_date = datetime.fromisoformat(bar['t'].replace('Z', '+00:00')).astimezone(timezone.utc).date()
+            bar_date = bar_start.date()
             return bar_date == datetime.now(timezone.utc).date()
 
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz)
-        bar_date = datetime.fromisoformat(bar['t'].replace('Z', '+00:00')).astimezone(tz).date()
+        bar_date = bar_start.astimezone(tz).date()
         if bar_date != now.date():
             return False
         market_close = now.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0)
