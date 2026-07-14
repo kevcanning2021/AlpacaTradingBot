@@ -55,6 +55,12 @@ CRYPTO_MAX_POSITIONS = int(os.getenv('CRYPTO_MAX_POSITIONS', '2'))
 # the stock-tuned 5% — still not zero false trips, same "cut most, not all" philosophy.
 CRYPTO_STOP_LOSS_THRESHOLD = float(os.getenv('CRYPTO_STOP_LOSS_THRESHOLD', '0.15'))
 CRYPTO_TRAILING_STOP_THRESHOLD = float(os.getenv('CRYPTO_TRAILING_STOP_THRESHOLD', '0.20'))
+# _handle_reentry computes the identical peak-relative pullback statistic as the trailing
+# stop above (just advisory instead of closing), so reuses that same backtested value
+# rather than guessing a new one — REENTRY_THRESHOLD (5%, stock-tuned) was the one
+# asset-class-sensitive threshold in trader.py that hadn't gotten a crypto split yet,
+# which mattered as of 2026-07-14 once crypto started trading on the production account.
+CRYPTO_REENTRY_THRESHOLD = float(os.getenv('CRYPTO_REENTRY_THRESHOLD', str(CRYPTO_TRAILING_STOP_THRESHOLD)))
 
 # WhatsApp Notifications (via CallMeBot)
 WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'

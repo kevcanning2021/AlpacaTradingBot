@@ -233,16 +233,22 @@ class TradingManager:
             return False
     
     def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
-        """Handle re-entry logic at current pullback threshold"""
+        """Handle re-entry logic at current pullback threshold.
+
+        Crypto uses its own, wider CRYPTO_REENTRY_THRESHOLD instead of REENTRY_THRESHOLD —
+        same reasoning as the stop-loss/trailing-stop split: the stock-tuned 5% is far too
+        tight for crypto's ordinary volatility.
+        """
         try:
+            threshold = settings.CRYPTO_REENTRY_THRESHOLD if position.get('asset_class') == 'crypto' else settings.REENTRY_THRESHOLD
             peak_price = self.position_peak_prices.get(symbol, 0)
             current_price = float(position.get('current_price', 0))
-            
+
             if peak_price > 0:
                 pullback_pct = (peak_price - current_price) / peak_price
-                
+
                 # If we've had a pullback at or above the current re-entry threshold, suggest re-entry
-                if pullback_pct >= settings.REENTRY_THRESHOLD:
+                if pullback_pct >= threshold:
                     action = {
                         'action': 'REENTRY_CANDIDATE',
                         'symbol': symbol,
