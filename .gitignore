@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 *.pyo
 watchdog_state.json
+peak_prices_state.json

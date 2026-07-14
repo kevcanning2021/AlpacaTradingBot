@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from datetime import datetime
 from typing import Dict, Optional
 import pytz
@@ -10,6 +12,8 @@ from scanner import OpportunityScanner
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'peak_prices_state.json')
+
 
 def _now() -> str:
     """Current time in REPORT_TIMEZONE, ISO format."""
@@ -18,17 +22,37 @@ def _now() -> str:
 
 class TradingManager:
     """Manages trading positions and stop loss adjustments"""
-    
+
     def __init__(self):
         self.client = AlpacaClient()
         self.notifier = WhatsAppNotifier()
         self.position_entry_prices = {}  # Track entry prices
-        self.position_peak_prices = {}   # Track peak prices for stop loss
+        self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
         self.trade_history = []          # Track all trades for P&L analysis
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
         self.loss_streak = 0             # Current losing streak
-    
+
+    def _load_peak_prices(self) -> Dict:
+        """Load persisted peak prices so the trailing stop survives a service restart —
+        otherwise a restart silently re-seeds every peak to the current price, discarding
+        any pre-restart gain the trailing stop was supposed to be protecting.
+        """
+        if os.path.exists(PEAK_PRICES_FILE):
+            try:
+                with open(PEAK_PRICES_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load peak prices state, starting fresh: {e}")
+        return {}
+
+    def _save_peak_prices(self):
+        try:
+            with open(PEAK_PRICES_FILE, 'w') as f:
+                json.dump(self.position_peak_prices, f)
+        except OSError as e:
+            logger.error(f"Failed to save peak prices state: {e}")
+
     def check_positions(self, asset_class: Optional[str] = None) -> Dict:
         """Check all open positions and apply trading logic.
 
@@ -68,10 +92,12 @@ class TradingManager:
                 # Update peak price tracking
                 if symbol not in self.position_peak_prices:
                     self.position_peak_prices[symbol] = current_price
+                    self._save_peak_prices()
                 else:
                     if current_price > self.position_peak_prices[symbol]:
                         self.position_peak_prices[symbol] = current_price
-                
+                        self._save_peak_prices()
+
                 # Handle stop loss adjustments
                 closed = False
                 if settings.ENABLE_STOP_LOSS_ADJUSTMENT:
@@ -128,6 +154,7 @@ class TradingManager:
                     self.client.close_position(symbol)
                     self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
                     self.position_peak_prices.pop(symbol, None)
+                    self._save_peak_prices()
                     closed = True
                     action = {
                         'action': 'STOP_LOSS_TRIGGERED',
@@ -184,6 +211,7 @@ class TradingManager:
                 self.client.close_position(symbol)
                 self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
                 self.position_peak_prices.pop(symbol, None)
+                self._save_peak_prices()
                 action = {
                     'action': 'TRAILING_STOP_TRIGGERED',
                     'symbol': symbol,
@@ -446,6 +474,7 @@ class TradingManager:
                     if position is not None:
                         self._record_trade_outcome(pos_symbol, float(position.get('unrealized_pl', 0)))
                     self.position_peak_prices.pop(pos_symbol, None)
+                    self._save_peak_prices()
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
