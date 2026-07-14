@@ -13,11 +13,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'peak_prices_state.json')
+REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reentry_state.json')
 
 
 def _now() -> str:
     """Current time in REPORT_TIMEZONE, ISO format."""
     return datetime.now(pytz.timezone(settings.REPORT_TIMEZONE)).isoformat()
+
+
+def _order_symbol_for(pos_symbol: str) -> Optional[str]:
+    """Reverse of alpaca_client.position_symbol(): map a position-format symbol
+    (e.g. 'BTCUSD') back to the order-format symbol create_order() needs (e.g.
+    'BTC/USD'). There's no generic algorithmic reverse (quote-currency length
+    varies), so this only resolves symbols currently in WATCHLIST/CRYPTO_WATCHLIST.
+    """
+    for w in settings.WATCHLIST + settings.CRYPTO_WATCHLIST:
+        if position_symbol(w) == pos_symbol:
+            return w
+    return None
 
 
 class TradingManager:
@@ -28,6 +41,7 @@ class TradingManager:
         self.notifier = WhatsAppNotifier()
         self.position_entry_prices = {}  # Track entry prices
         self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
+        self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
         self.trade_history = []          # Track all trades for P&L analysis
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
@@ -53,6 +67,25 @@ class TradingManager:
         except OSError as e:
             logger.error(f"Failed to save peak prices state: {e}")
 
+    def _load_reentry_state(self) -> list:
+        """Which symbols have already re-entered since their current peak was set —
+        persisted for the same reason as peak prices: a restart shouldn't silently
+        reset this and allow an immediate re-fire on a pullback already acted on."""
+        if os.path.exists(REENTRY_STATE_FILE):
+            try:
+                with open(REENTRY_STATE_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load re-entry state, starting fresh: {e}")
+        return []
+
+    def _save_reentry_state(self):
+        try:
+            with open(REENTRY_STATE_FILE, 'w') as f:
+                json.dump(list(self.reentry_fired), f)
+        except OSError as e:
+            logger.error(f"Failed to save re-entry state: {e}")
+
     def check_positions(self, asset_class: Optional[str] = None) -> Dict:
         """Check all open positions and apply trading logic.
 
@@ -68,7 +101,8 @@ class TradingManager:
             if asset_class is not None:
                 positions = [p for p in positions if p.get('asset_class') == asset_class]
             account = self.client.get_account()
-            
+            buying_power = float(account.get('buying_power', 0))  # decremented locally as re-entry buys fire below
+
             report = {
                 'timestamp': _now(),
                 'account_equity': account.get('equity'),
@@ -77,7 +111,7 @@ class TradingManager:
                 'actions_taken': [],
                 'errors': []
             }
-            
+
             for position in positions:
                 symbol = position.get('symbol')
                 qty = float(position.get('qty', 0))
@@ -97,6 +131,11 @@ class TradingManager:
                     if current_price > self.position_peak_prices[symbol]:
                         self.position_peak_prices[symbol] = current_price
                         self._save_peak_prices()
+                        # A fresh peak starts a new pullback episode -- allow another
+                        # re-entry once this new high gives back enough to qualify again.
+                        if symbol in self.reentry_fired:
+                            self.reentry_fired.discard(symbol)
+                            self._save_reentry_state()
 
                 # Handle stop loss adjustments
                 closed = False
@@ -110,7 +149,7 @@ class TradingManager:
 
                 # Handle re-entries
                 if not closed and settings.ENABLE_REENTRY:
-                    self._handle_reentry(symbol, position, pnl_pct, report)
+                    buying_power = self._handle_reentry(symbol, position, pnl_pct, report, buying_power)
 
             if report['actions_taken'] and self.notifier.enabled:
                 try:
@@ -149,6 +188,9 @@ class TradingManager:
                     self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
                     self.position_peak_prices.pop(symbol, None)
                     self._save_peak_prices()
+                    if symbol in self.reentry_fired:
+                        self.reentry_fired.discard(symbol)
+                        self._save_reentry_state()
                     closed = True
                     action = {
                         'action': 'STOP_LOSS_TRIGGERED',
@@ -206,6 +248,9 @@ class TradingManager:
                 self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
                 self.position_peak_prices.pop(symbol, None)
                 self._save_peak_prices()
+                if symbol in self.reentry_fired:
+                    self.reentry_fired.discard(symbol)
+                    self._save_reentry_state()
                 action = {
                     'action': 'TRAILING_STOP_TRIGGERED',
                     'symbol': symbol,
@@ -232,41 +277,88 @@ class TradingManager:
             logger.error(f"Error handling trailing stop for {symbol}: {e}")
             return False
     
-    def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
-        """Advisory only — logs/notifies a REENTRY_CANDIDATE when a position has pulled back
-        far enough from its peak to be worth considering, but never calls create_order/
-        execute_order itself. An actual re-entry buy only happens if scan_and_execute
-        independently sees a fresh EMA9/21 crossover, or a human acts on the notification.
+    def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict, buying_power: float) -> float:
+        """Add to an existing open position on a pullback from its peak (only reached when
+        stop-loss/trailing-stop didn't already close it this check, i.e. the pullback is
+        real but not a breakdown). Places a real buy order as of 2026-07-14 — previously
+        advisory-only. Fires at most once per pullback episode (self.reentry_fired, cleared
+        when a fresh peak is set) so a position sitting at the same pullback level for many
+        consecutive checks doesn't re-buy every single time. Returns the (possibly
+        decremented) buying_power so callers checking multiple positions in one pass don't
+        each buy against a stale, shared figure.
 
         Crypto uses its own, wider CRYPTO_REENTRY_THRESHOLD instead of REENTRY_THRESHOLD —
         same reasoning as the stop-loss/trailing-stop split: the stock-tuned 5% is far too
-        tight for crypto's ordinary volatility. Both thresholds only ever gate this
-        notification, not trading behavior.
+        tight for crypto's ordinary volatility.
         """
         try:
             threshold = settings.CRYPTO_REENTRY_THRESHOLD if position.get('asset_class') == 'crypto' else settings.REENTRY_THRESHOLD
             peak_price = self.position_peak_prices.get(symbol, 0)
             current_price = float(position.get('current_price', 0))
 
-            if peak_price > 0:
-                pullback_pct = (peak_price - current_price) / peak_price
+            if peak_price <= 0:
+                return buying_power
+            pullback_pct = (peak_price - current_price) / peak_price
+            if pullback_pct < threshold or symbol in self.reentry_fired:
+                return buying_power
 
-                # If we've had a pullback at or above the current re-entry threshold, suggest re-entry
-                if pullback_pct >= threshold:
-                    action = {
-                        'action': 'REENTRY_CANDIDATE',
-                        'symbol': symbol,
-                        'pullback_pct': round(pullback_pct * 100, 2),
-                        'peak_price': round(peak_price, 2),
-                        'current_price': round(current_price, 2),
-                        'recommendation': f'Position pulled back {round(pullback_pct * 100, 2)}% from peak. Consider re-entry.'
-                    }
-                    report['actions_taken'].append(action)
-                    logger.info(f"[{symbol}] Pullback of {round(pullback_pct * 100, 2)}% detected - Re-entry candidate")
-        
+            is_crypto = position.get('asset_class') == 'crypto'
+            position_size_usd = settings.CRYPTO_POSITION_SIZE_USD if is_crypto else settings.POSITION_SIZE_USD
+            order_symbol = _order_symbol_for(symbol)
+
+            if order_symbol is None:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak but {symbol} is not on a configured watchlist, so its order-format symbol could not be resolved. No buy placed.'
+                })
+                logger.warning(f"[{symbol}] Re-entry threshold hit but no order-format symbol found on any watchlist — skipping")
+                return buying_power
+
+            if buying_power < position_size_usd:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak but buying power (${buying_power:.2f}) is below the ${position_size_usd:.2f} re-entry size. No buy placed.'
+                })
+                logger.info(f"[{symbol}] Re-entry threshold hit but insufficient buying power (${buying_power:.2f})")
+                return buying_power
+
+            notional = round(position_size_usd, 2)
+            client_order_id = f"reentry-{symbol}-{int(datetime.now().timestamp())}"
+            try:
+                order = self.client.create_order(order_symbol, side='buy', notional=notional, client_order_id=client_order_id)
+                self.reentry_fired.add(symbol)
+                self._save_reentry_state()
+                buying_power -= notional
+                action = {
+                    'action': 'REENTRY_TRIGGERED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'peak_price': round(peak_price, 2),
+                    'current_price': round(current_price, 2),
+                    'notional': notional,
+                    'order_id': order.get('id'),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak (${round(peak_price, 2)}). Added ${notional:.2f}.'
+                }
+                logger.warning(f"[{symbol}] Pulled back {round(pullback_pct * 100, 2)}% from peak ${round(peak_price, 2)} - added ${notional:.2f} (re-entry)")
+            except Exception as order_error:
+                action = {
+                    'action': 'REENTRY_FAILED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak. Re-entry buy FAILED: {order_error}'
+                }
+                logger.error(f"[{symbol}] Re-entry buy failed: {order_error}")
+            report['actions_taken'].append(action)
+            return buying_power
+
         except Exception as e:
             report['errors'].append(f"Error handling re-entry for {symbol}: {e}")
             logger.error(f"Error handling re-entry for {symbol}: {e}")
+            return buying_power
     
     def execute_order(self, symbol: str, qty: float, side: str, order_type: str = 'market') -> Dict:
         """Execute a trade order"""
@@ -479,6 +571,9 @@ class TradingManager:
                         self._record_trade_outcome(pos_symbol, float(position.get('unrealized_pl', 0)))
                     self.position_peak_prices.pop(pos_symbol, None)
                     self._save_peak_prices()
+                    if pos_symbol in self.reentry_fired:
+                        self.reentry_fired.discard(pos_symbol)
+                        self._save_reentry_state()
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
