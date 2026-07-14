@@ -76,7 +76,7 @@ class AlpacaClient:
     def create_order(self, symbol: str, qty: Optional[float] = None, side: str = 'buy',
                     order_type: str = 'market', limit_price: Optional[float] = None,
                     stop_price: Optional[float] = None, time_in_force: Optional[str] = None,
-                    notional: Optional[float] = None) -> Dict:
+                    notional: Optional[float] = None, client_order_id: Optional[str] = None) -> Dict:
         """Create a new order. Provide either qty (shares) or notional (dollar amount, fractional-share buys).
 
         Crypto only accepts 'gtc' or 'ioc' for time_in_force (not 'day', which stocks default to),
@@ -98,6 +98,8 @@ class AlpacaClient:
             payload['notional'] = notional
         else:
             payload['qty'] = qty
+        if client_order_id is not None:
+            payload['client_order_id'] = client_order_id
 
         if limit_price:
             payload['limit_price'] = limit_price
