@@ -7,7 +7,7 @@ import pytz
 from alpaca_client import AlpacaClient, position_symbol
 from config import settings
 from whatsapp_notifier import WhatsAppNotifier
-from scanner import OpportunityScanner
+from scanner import OpportunityScanner, _compute_rsi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -290,6 +290,12 @@ class TradingManager:
         Crypto uses its own, wider CRYPTO_REENTRY_THRESHOLD instead of REENTRY_THRESHOLD —
         same reasoning as the stop-loss/trailing-stop split: the stock-tuned 5% is far too
         tight for crypto's ordinary volatility.
+
+        Also requires RSI < OpportunityScanner.BUY_RSI_MAX (fetched fresh via get_bars),
+        same momentum gate a fresh scanner entry requires — a pullback-from-peak alone
+        doesn't confirm momentum has turned, added 2026-07-14 after review flagged that
+        the original version would average into a position on price distance alone with
+        no reference to RSI/EMA state at all.
         """
         try:
             threshold = settings.CRYPTO_REENTRY_THRESHOLD if position.get('asset_class') == 'crypto' else settings.REENTRY_THRESHOLD
@@ -314,6 +320,32 @@ class TradingManager:
                     'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak but {symbol} is not on a configured watchlist, so its order-format symbol could not be resolved. No buy placed.'
                 })
                 logger.warning(f"[{symbol}] Re-entry threshold hit but no order-format symbol found on any watchlist — skipping")
+                return buying_power
+
+            # Unlike a fresh scanner entry (which requires EMA9>EMA21 crossing AND RSI <
+            # BUY_RSI_MAX), a pullback-from-peak alone says nothing about whether momentum
+            # has actually turned back up -- reuse the scanner's own overbought/momentum
+            # gate here too, rather than averaging into a position purely on price distance.
+            try:
+                bars = self.client.get_bars(order_symbol, limit=35)
+                closes = [float(b['c']) for b in bars]
+                rsi = _compute_rsi(closes) if len(closes) >= 15 else None
+            except Exception as bar_error:
+                rsi = None
+                logger.error(f"[{symbol}] Re-entry RSI check failed: {bar_error}")
+
+            if rsi is None or rsi >= OpportunityScanner.BUY_RSI_MAX:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': (
+                        f'Pulled back {round(pullback_pct * 100, 2)}% from peak but RSI '
+                        f'({"unavailable" if rsi is None else round(rsi, 1)}) does not confirm '
+                        f'momentum has turned (needs < {OpportunityScanner.BUY_RSI_MAX}). No buy placed.'
+                    )
+                })
+                logger.info(f"[{symbol}] Re-entry threshold hit but RSI momentum check failed (RSI={rsi})")
                 return buying_power
 
             if buying_power < position_size_usd:
