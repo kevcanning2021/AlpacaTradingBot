@@ -233,11 +233,15 @@ class TradingManager:
             return False
     
     def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
-        """Handle re-entry logic at current pullback threshold.
+        """Advisory only — logs/notifies a REENTRY_CANDIDATE when a position has pulled back
+        far enough from its peak to be worth considering, but never calls create_order/
+        execute_order itself. An actual re-entry buy only happens if scan_and_execute
+        independently sees a fresh EMA9/21 crossover, or a human acts on the notification.
 
         Crypto uses its own, wider CRYPTO_REENTRY_THRESHOLD instead of REENTRY_THRESHOLD —
         same reasoning as the stop-loss/trailing-stop split: the stock-tuned 5% is far too
-        tight for crypto's ordinary volatility.
+        tight for crypto's ordinary volatility. Both thresholds only ever gate this
+        notification, not trading behavior.
         """
         try:
             threshold = settings.CRYPTO_REENTRY_THRESHOLD if position.get('asset_class') == 'crypto' else settings.REENTRY_THRESHOLD
