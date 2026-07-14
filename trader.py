@@ -135,20 +135,14 @@ class TradingManager:
         """
         try:
             threshold = settings.CRYPTO_STOP_LOSS_THRESHOLD if position.get('asset_class') == 'crypto' else settings.STOP_LOSS_THRESHOLD
-            # If position is up at or above current stop loss threshold, consider tightening stop
-            if pnl_pct >= threshold:
-                action = {
-                    'action': 'STOP_LOSS_CANDIDATE',
-                    'symbol': symbol,
-                    'pnl_pct': round(pnl_pct * 100, 2),
-                    'recommendation': f'Position is up {round(pnl_pct * 100, 2)}%. Consider trailing stop or moving stop up.'
-                }
-                report['actions_taken'].append(action)
-                logger.info(f"[{symbol}] Position up {round(pnl_pct * 100, 2)}% - Stop loss adjustment recommended")
-                return False
 
-            # If position is down at or below current stop loss threshold, close it
-            elif pnl_pct <= -threshold:
+            # If position is down at or below current stop loss threshold, close it.
+            # (No separate "up" branch here — the independent trailing stop already
+            # protects gains above threshold; a duplicate advisory used to fire on
+            # every single check for as long as the position stayed elevated, which
+            # meant an hourly notification email/WhatsApp message for every winning
+            # position once notifications are enabled.)
+            if pnl_pct <= -threshold:
                 closed = False
                 try:
                     self.client.close_position(symbol)

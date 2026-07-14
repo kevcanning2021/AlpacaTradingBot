@@ -42,8 +42,11 @@ secrets setup. SSH access to the VPS uses a dedicated deploy key
 
 ## Why state matters: re-entry and streak logic
 
-- `STOP_LOSS_ALERT` / `STOP_LOSS_CANDIDATE` (based on entry price vs. current
-  price) work correctly on any single check, stateless or not.
+- `STOP_LOSS_ALERT` / `STOP_LOSS_TRIGGERED` (based on entry price vs. current
+  price) work correctly on any single check, stateless or not. (The
+  `STOP_LOSS_CANDIDATE` advisory that used to fire once a position sat above
+  threshold was removed 2026-07-14 — it duplicated the independent trailing
+  stop and was re-firing, and re-notifying, on every single check.)
 - `REENTRY_CANDIDATE` (`trader.py: _handle_reentry`) depends on
   `position_peak_prices`, which only accumulates across repeated calls to
   `check_positions()` on the same `TradingManager` instance.
