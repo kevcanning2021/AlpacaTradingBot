@@ -56,11 +56,17 @@ CRYPTO_MAX_POSITIONS = int(os.getenv('CRYPTO_MAX_POSITIONS', '2'))
 CRYPTO_STOP_LOSS_THRESHOLD = float(os.getenv('CRYPTO_STOP_LOSS_THRESHOLD', '0.15'))
 CRYPTO_TRAILING_STOP_THRESHOLD = float(os.getenv('CRYPTO_TRAILING_STOP_THRESHOLD', '0.20'))
 # _handle_reentry computes the identical peak-relative pullback statistic as the trailing
-# stop above (just advisory instead of closing), so reuses that same backtested value
-# rather than guessing a new one — REENTRY_THRESHOLD (5%, stock-tuned) was the one
-# asset-class-sensitive threshold in trader.py that hadn't gotten a crypto split yet,
-# which mattered as of 2026-07-14 once crypto started trading on the production account.
-CRYPTO_REENTRY_THRESHOLD = float(os.getenv('CRYPTO_REENTRY_THRESHOLD', str(CRYPTO_TRAILING_STOP_THRESHOLD)))
+# stop above (just advisory instead of closing) — REENTRY_THRESHOLD (5%, stock-tuned) was
+# the one asset-class-sensitive threshold in trader.py that hadn't gotten a crypto split
+# yet, which mattered as of 2026-07-14 once crypto started trading on the production
+# account. IMPORTANT: must stay strictly below CRYPTO_TRAILING_STOP_THRESHOLD, not equal
+# to it — check_positions() runs stop-loss -> trailing-stop -> re-entry in that order and
+# skips re-entry once a position is closed, so setting them equal (an oversight in the
+# first version of this fix, same day) means the trailing stop always closes the position
+# at the same pullback level before re-entry can ever fire, making the advisory dead code.
+# 0.125 preserves the same ratio as the stock config (REENTRY_THRESHOLD/TRAILING_STOP_THRESHOLD
+# = 5%/8% = 0.625, applied to crypto's 20%: 0.625 * 0.20 = 0.125) rather than a new guess.
+CRYPTO_REENTRY_THRESHOLD = float(os.getenv('CRYPTO_REENTRY_THRESHOLD', '0.125'))
 
 # WhatsApp Notifications (via CallMeBot)
 WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'
