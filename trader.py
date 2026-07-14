@@ -425,8 +425,10 @@ class TradingManager:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
                     continue
                 notional = round(position_size_usd, 2)
+                client_order_id = f"scan-buy-{symbol.replace('/', '')}-{int(datetime.now().timestamp())}"
                 try:
-                    order = self.client.create_order(symbol, side='buy', notional=notional)
+                    order = self.client.create_order(symbol, side='buy', notional=notional,
+                                                       client_order_id=client_order_id)
                     qty = round(notional / price, 4)
                     buying_power -= notional
                     executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
