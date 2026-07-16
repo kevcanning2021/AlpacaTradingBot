@@ -47,11 +47,23 @@ class OpportunityScanner:
                        # revisit if this account's real trade outcomes diverge from what this
                        # backtest predicts.
 
+    # _compute_ema seeds each call's EMA from a plain average of the first `period`
+    # bars *in whatever window it's given*, then smooths forward -- with too short a
+    # window that seed barely has time to converge before the final value is used,
+    # especially for EMA21 (k~=0.091, needs ~40-60 smoothing steps). 35 bars left
+    # EMA21 undercooked; backtested (2026-07-16) against a continuous EMA over the
+    # full history (the methodology behind every threshold in STRATEGY.md) and found
+    # 75-90 bars is where the windowed version converges to match it -- confirmed
+    # stable (identical results) from 75 bars on for stocks, 90 for crypto. Below
+    # that, the 35-bar version was measurably weaker and outlier-driven. See
+    # STRATEGY.md "Automated monitoring" for the full investigation.
+    SIGNAL_BAR_WINDOW = 90
+
     def __init__(self, client):
         self.client = client
 
     def _analyze(self, symbol: str) -> Dict:
-        bars = self.client.get_bars(symbol, limit=35)
+        bars = self.client.get_bars(symbol, limit=self.SIGNAL_BAR_WINDOW)
         if len(bars) < 22:
             return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history', 'price': 0.0}
 

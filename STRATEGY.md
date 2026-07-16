@@ -46,6 +46,7 @@ touch each other's positions.
 |---|---|---|---|
 | `BUY_RSI_MAX` | 65 / 65 | `scanner.py` | 2026-07-16 backtest |
 | `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 backtest |
+| `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest |
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
 | Re-entry | 5% / 12.5% | `config/settings.py` | 2026-07-14 |
@@ -119,36 +120,47 @@ pattern as `watchdog.py`:
   (leave-one-symbol-out flips sign), or a >50% expectancy drop since the
   last run.
 
-**Real finding while building this, 2026-07-16 — live/backtest EMA
-methodology gap, unreconciled:** every backtest on this page (including
-today's SELL_RSI_MIN change) computes one continuous EMA9/EMA21 series
+**Live/backtest EMA methodology gap found, then fixed same day (2026-07-16,
+committed after this backtest).** Every backtest on this page (including
+the SELL_RSI_MIN change above) computes one continuous EMA9/EMA21 series
 over the whole fetched window. But `OpportunityScanner._analyze` — the
-actual live code — calls `get_bars(symbol, limit=35)` fresh on every
-single check and computes EMA9/21 from scratch on just those 35 bars each
-time, with **no continuity between checks** (each call's EMA "seed" is a
-plain average of whichever 9/21 bars happen to be first in that day's
-35-bar window). Tested both against identical live data the same day:
-continuous EMA reproduced the documented 65/80 result almost exactly (26
-trades, +1.352%/trade, leave-one-out +0.71% to +1.89% — matches
-"not outlier-driven"); the literal 35-bar-window-per-check version gave a
-materially different, weaker, outlier-driven result (19 trades,
-+0.914%/trade, flips negative excluding AAPL). `strategy_check.py`
-deliberately uses the continuous version to stay comparable with this
-page's history, **not** because it's confirmed to be what the live bot
-does — it isn't. Whether this materially affects real trading (vs. being
-a backtest-only artifact) is unverified. Kevin's call: investigate further
-(e.g., quantify how often the two methodologies would have signaled
-differently), change `scanner.py` to carry EMA state between checks
-(a real behavior change, needs its own backtest-before-deploy per every
-other threshold on this page), or leave as-is.
+actual live code — called `get_bars(symbol, limit=35)` fresh on every
+single check and computed EMA9/21 from scratch on just those 35 bars each
+time, with no continuity between checks (each call's EMA "seed" is a plain
+average of whichever 9/21 bars happen to be first in that day's window).
+Tested both against identical live data: continuous EMA reproduced the
+documented 65/80 result almost exactly (26 trades, +1.352%/trade,
+leave-one-out +0.71% to +1.89% — matches "not outlier-driven"); the
+literal 35-bar-window-per-check version gave a materially weaker,
+outlier-driven result (19 trades, +0.914%/trade, flips negative excluding
+AAPL).
+
+**Root cause, not just symptom:** `_compute_ema`'s seed (a plain average
+of the first `period` bars in whatever window it's given) needs room to
+smooth forward before it's trustworthy — EMA21 (k≈0.091) needs ~40-60
+steps, and 35 bars only gave it ~14. Backtested the windowed methodology
+itself at increasing window sizes (35/45/60/75/90/120/150) against the
+same real data: results converge to match the continuous-EMA baseline
+exactly from **75 bars for stocks, 90 for crypto**, and stay identical
+beyond that (confirmed no further change out to 150). Below 75, weaker and
+outlier-driven; at 45, still measurably short of full convergence. Chose
+**90** (`scanner.py: OpportunityScanner.SIGNAL_BAR_WINDOW`) as a single
+value safe for both watchlists. Verified no immediate side effect before
+deploying: the account's one open position (NVDA) flips from a fresh BUY
+signal to HOLD under the wider window, but since it's already held,
+neither signal changes any actual order (no duplicate-buy path exists,
+HOLD does nothing) — confirmed via `get_positions()` this was the only
+open position. `trader.py`'s separate re-entry RSI gate (`limit=35` at
+line ~329) was deliberately left unchanged — it only calls `_compute_rsi`,
+which is window-length-invariant beyond ~15 bars, so it was never affected
+by this gap.
 
 ## Open items — real, deliberately not acted on
 
-- **Live scanner's per-check EMA windowing doesn't match the backtest
-  methodology that validated its own thresholds** — see "Automated
-  monitoring" above for the full write-up. Not yet investigated further
-  or fixed; changing `scanner.py`'s EMA calculation would be a real
-  behavior change needing its own backtest first.
+- **Whether the pre-fix 35-bar EMA windowing affected any *already-placed*
+  real trade** (vs. only being visible in backtest) is unverified and
+  unknowable after the fact — not revisited, since the fix is forward-only
+  and the account has too little trade history yet to check retroactively.
 - **`adjust_strategy()` (`trader.py`) mutates `STOP_LOSS_THRESHOLD` and
   `REENTRY_THRESHOLD` at runtime** based on win/loss streak (3 consecutive)
   and equity-change-vs-`INITIAL_EQUITY`, with **no backtest behind this
