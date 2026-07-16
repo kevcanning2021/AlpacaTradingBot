@@ -32,9 +32,20 @@ class OpportunityScanner:
     """Scans a watchlist for EMA crossover + RSI signals and returns trade recommendations."""
 
     BUY_RSI_MAX = 65   # Don't buy into overbought conditions
-    SELL_RSI_MIN = 85  # Exit overbought positions — RSI routinely sits >75 for weeks during a
-                       # real rally, so 75 exited winners days after entry; 85 still catches
-                       # genuine blow-off tops without cutting sustained trends short.
+    SELL_RSI_MIN = 80  # Exit overbought positions. Was 85 (raised from 75 on 2026-07-09 against
+                       # a ~90-day window, reasoning that RSI routinely sits >75 for weeks during
+                       # a real rally). Lowered back to 80 on 2026-07-16 after a 14-month backtest
+                       # (300 daily bars, full watchlist) showed 85 gives back more than it gains
+                       # across typical/mixed conditions, not just the rare sustained rally the
+                       # original change was tuned for: 65/85 = +0.634%/trade (31 trades, 35% win)
+                       # vs. 65/80 = +1.286%/trade (32 trades, 47% win) over the same window.
+                       # Verified not outlier-driven -- every leave-one-symbol-out result stayed
+                       # positive (+0.50% to +1.74%/trade), unlike prior rejected hypotheses this
+                       # same day (wider watchlist, entry confirmation) where excluding one symbol
+                       # flipped the result negative. Both backtests (75->85 and 85->80) are
+                       # honestly measuring different market windows/regimes, not contradictory --
+                       # revisit if this account's real trade outcomes diverge from what this
+                       # backtest predicts.
 
     def __init__(self, client):
         self.client = client
