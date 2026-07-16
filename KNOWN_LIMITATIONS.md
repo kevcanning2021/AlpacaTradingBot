@@ -78,24 +78,26 @@ worth avoiding overlap with market hours if doing a lot of local pulls).
   was silently re-seeding every peak to the current price, discarding
   whatever gain the trailing stop was supposed to be protecting.
 - `win_streak`/`loss_streak` (`trader.py: _record_trade_outcome`) are
-  **still in-memory only**, not persisted — deliberately, since they feed
-  `adjust_strategy()`'s runtime threshold mutation (see below), and fixing
-  that needs its own decision, not a mechanical copy of the peak-price
-  fix. A restart resets the streak count to 0.
+  **still in-memory only**, not persisted — a restart resets the streak
+  count to 0. Display-only in the daily report as of 2026-07-16 (see
+  below), so lower stakes than when they drove live threshold mutation.
 - Streaks update only when a position actually closes with a realized
   P&L, not from the concurrent unrealized-P&L direction of whatever's
   open (fixed 2026-07-09 — two correlated positions dipping together used
   to count as a false 3-loss streak).
 
-## `adjust_strategy()` mutates live thresholds with no backtest behind it
+## `adjust_strategy()` — backtested and disabled, 2026-07-16
 
-`trader.py: adjust_strategy()` — called every check cycle — directly
-reassigns the module-level `settings.STOP_LOSS_THRESHOLD` (tighten after 3
-wins, loosen after 3 losses) and `settings.REENTRY_THRESHOLD` (tighten on
-+5% equity, loosen on -5%). Every other threshold in this codebase is
-backed by a real backtest against historical bars (see `STRATEGY.md`) —
-this one isn't. It can silently override a verified threshold mid-session
-based on nothing but a streak, and its trigger is further weakened by
-`win_streak`/`loss_streak` resetting on every restart (see above).
-Flagged 2026-07-16, not yet disabled, backtested, or removed — open
-decision.
+`trader.py: adjust_strategy()` directly reassigns the module-level
+`settings.STOP_LOSS_THRESHOLD` (tighten after 3 wins, loosen after 3
+losses) and `settings.REENTRY_THRESHOLD` (tighten on +5% equity, loosen on
+-5%) — the one threshold-mutating path in this codebase that, until today,
+had no backtest behind it (every other threshold is validated against
+historical bars, see `STRATEGY.md`). A full-system backtest (real
+entries/exits/stop-loss/trailing-stop, 300 daily bars, ~14 months,
+test-account sizing) found it underperformed fixed thresholds (+6.66% vs
++7.65% total return) while firing often (17 threshold changes across 25
+closed trades). `scheduler.py` no longer calls it; the method itself is
+left intact in `trader.py`, not deleted, in case a more robust backtest
+later justifies re-enabling it. See `STRATEGY.md` "Open items" for the
+caveat that this is a single historical path, not an aggregated result.

@@ -161,30 +161,32 @@ by this gap.
   real trade** (vs. only being visible in backtest) is unverified and
   unknowable after the fact — not revisited, since the fix is forward-only
   and the account has too little trade history yet to check retroactively.
-- **`adjust_strategy()` (`trader.py`) mutates `STOP_LOSS_THRESHOLD` and
-  `REENTRY_THRESHOLD` at runtime** based on win/loss streak (3 consecutive)
-  and equity-change-vs-`INITIAL_EQUITY`, with **no backtest behind this
-  logic at all** — unlike every threshold above. It directly reassigns the
-  module-level `settings.STOP_LOSS_THRESHOLD`, so a win/loss streak can
-  silently override a carefully-verified threshold mid-session. Its
-  trigger condition is further undermined by `win_streak`/`loss_streak`
-  living only in memory (not persisted like `peak_prices`/`reentry_fired`
-  are) — a restart resets the streak count, so behavior is inconsistent
-  across deploys. Flagged 2026-07-16, not yet disabled or backtested —
-  Kevin's call whether to keep, backtest, or remove it.
+- ~~`adjust_strategy()` mutates `STOP_LOSS_THRESHOLD`/`REENTRY_THRESHOLD` at
+  runtime with no backtest behind it~~ **Resolved 2026-07-16**: backtested
+  (full-system simulation — real entries/exits/stop-loss/trailing-stop, 300
+  daily bars, ~14 months, test-account sizing) and found it underperformed
+  fixed thresholds (+6.66% vs +7.65% total return) while firing often (17
+  threshold changes across 25 closed trades, repeatedly ratcheting
+  stop-loss across its full 2%-10% range). Live call removed from
+  `scheduler.py`; `trader.py: adjust_strategy()` left intact, not deleted.
+  Caveat: this backtest is a single historical path (one specific streak
+  sequence), not an aggregated/leave-one-out-validated result like the RSI
+  thresholds — directional evidence, re-visitable with a more robust
+  multi-window backtest if desired.
 - **Wilder-smoothed vs. Cutler's-style RSI** — `_compute_rsi` is the
   latter; every threshold above was tuned against it, so it's internally
   consistent, but untested whether Wilder smoothing would perform
   differently. Needs a backtest before any change.
-- **`win_streak`/`loss_streak` persistence** — not fixed alongside
-  `peak_prices`/`reentry_fired`, specifically because it feeds
-  `adjust_strategy()`'s threshold mutation above; persisting it changes
-  what streak state means across a restart in a way that needs its own
-  decision, not a mechanical copy of the peak-price fix.
-- **Crypto's 60-min check interval** has no session-close bound the way
-  stocks do — a stop-loss/trailing-stop breach between checks is caught
-  late. Test account already has precedent for a tighter stock interval
-  (5 min); same reasoning could apply to crypto, not yet done.
+- **`win_streak`/`loss_streak` persistence** — still not fixed alongside
+  `peak_prices`/`reentry_fired`. Lower stakes now that `adjust_strategy()`
+  is disabled (streaks are display-only in the daily report, per
+  `analyze_performance`), but left as-is rather than revisited, since
+  fixing it would only matter again if `adjust_strategy()` is re-enabled.
+- ~~Crypto's 60-min check interval has no session-close bound~~
+  **Resolved 2026-07-16**: `CRYPTO_CHECK_INTERVAL_MINUTES` default lowered
+  60 → 15 (both services, no `.env` override on either) — kept looser than
+  stock's 5-min interval since crypto's stop-loss/trailing-stop (15%/20%)
+  are already wider to tolerate crypto's higher ordinary volatility.
 - **Shared buying-power pool between the stock and crypto scheduled
   jobs** (separate timers, each fetches its own fresh `get_account()`) —
   narrow remaining race if both fire in the same window; fails safe via
