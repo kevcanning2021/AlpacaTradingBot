@@ -39,7 +39,6 @@ class TradingManager:
     def __init__(self):
         self.client = AlpacaClient()
         self.notifier = WhatsAppNotifier()
-        self.position_entry_prices = {}  # Track entry prices
         self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
         self.trade_history = []          # Track all trades for P&L analysis

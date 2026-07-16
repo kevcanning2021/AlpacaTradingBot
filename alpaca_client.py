@@ -65,14 +65,6 @@ class AlpacaClient:
         else:
             raise Exception(f"Failed to get positions: {status} - {body}")
     
-    def get_position(self, symbol: str) -> Optional[Dict]:
-        """Get specific position by symbol"""
-        status, body = self._request('GET', f'/positions/{symbol}')
-        if status == 200:
-            return json.loads(body)
-        else:
-            return None
-    
     def create_order(self, symbol: str, qty: Optional[float] = None, side: str = 'buy',
                     order_type: str = 'market', limit_price: Optional[float] = None,
                     stop_price: Optional[float] = None, time_in_force: Optional[str] = None,
