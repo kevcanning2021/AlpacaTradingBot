@@ -135,13 +135,18 @@ watchlist, using the exact live scanner logic:
 
 ## How to backtest a change
 
-Real historical bars are reachable from the VPS (and this dev machine),
-not from the Strategy Review routine's cloud sandbox (network-blocked).
-Pattern used for every backtest above: import `_compute_ema`/`_compute_rsi`
-directly from `scanner.py` (or the whole `OpportunityScanner`), walk real
-daily bars (`alpaca_client.py: get_bars`, paginates automatically now)
-bar-by-bar simulating buy/sell, and **always check per-symbol and
-leave-one-symbol-out** before trusting an aggregate — an aggregate that
-only survives with one specific symbol included is that symbol's story,
-not a real edge (see the rejected hypotheses above for two examples where
-this check mattered).
+Real historical bars are reachable from the VPS and this dev machine, not
+from the Strategy Review routine's cloud sandbox (persistently
+network-blocked). An interactive Claude Code session can also reach
+`data.alpaca.markets` through its own proxy tunnel, but that tunnel can
+403 transiently — check `$HTTPS_PROXY/__agentproxy/status` and retry
+before concluding it's blocked, rather than assuming the same persistent
+block as the Strategy Review routine. Pattern used for every backtest
+above: import `_compute_ema`/`_compute_rsi` directly from `scanner.py` (or
+the whole `OpportunityScanner`), walk real daily bars (`alpaca_client.py:
+get_bars`, paginates automatically now, returns plain dicts keyed
+`c/h/l/n/o/t/v/vw` not objects) bar-by-bar simulating buy/sell, and
+**always check per-symbol and leave-one-symbol-out** before trusting an
+aggregate — an aggregate that only survives with one specific symbol
+included is that symbol's story, not a real edge (see the rejected
+hypotheses above for two examples where this check mattered).
