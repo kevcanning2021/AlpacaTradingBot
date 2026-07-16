@@ -5,3 +5,4 @@ __pycache__/
 watchdog_state.json
 peak_prices_state.json
 reentry_state.json
+strategy_check_state.json
