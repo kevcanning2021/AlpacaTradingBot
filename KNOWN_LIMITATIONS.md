@@ -22,6 +22,18 @@ A separate order-less TypeScript bot (`crypto-paper-bot/`) also runs on
 the VPS via root crontab (not systemd) — analysis-only, no broker
 integration, reuses the same WhatsApp/CallMeBot env vars.
 
+## `strategy_check.py` — hourly VPS cron, not the Strategy Review routine
+
+Added 2026-07-16, root crontab on the VPS (`0 * * * *`, test account only,
+`/opt/alpaca-bot-test`), logs to `/var/log/alpaca-strategy-check.log`.
+Alert-only (WhatsApp, same cooldown pattern as `watchdog.py`) — never
+trades, never edits thresholds. Hourly: re-runs the live scanner for a
+signal-health check. Daily, after close: re-backtests `BUY_RSI_MAX`/
+`SELL_RSI_MIN` against fresh bars. See `STRATEGY.md` "Automated
+monitoring" for what it checks and a real methodology gap it surfaced
+between how the strategy was backtested and how the live scanner actually
+computes signals each check.
+
 ## Strategy Review — a scheduled cloud routine, not disabled
 
 A Claude Code scheduled routine (`trig_...`, "Strategy Review -

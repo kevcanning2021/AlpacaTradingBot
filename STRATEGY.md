@@ -102,8 +102,53 @@ watchlist, using the exact live scanner logic:
   daily bars, and the rescaled version's apparent edge was entirely one
   outlier symbol (GOOGL) — negative once excluded.
 
+## Automated monitoring: `strategy_check.py`
+
+A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
+2026-07-16 in direct service of this doc's stated goal. Alert-only —
+never trades, never edits thresholds — via the same WhatsApp/cooldown
+pattern as `watchdog.py`:
+
+- **Hourly**: re-runs `OpportunityScanner.scan()` against the live
+  watchlist. Flags a data outage (too few bars / scanner error) or a SELL
+  signal that's persisted 2+ consecutive checks on a symbol still held.
+- **Once/day, after close**: re-backtests `BUY_RSI_MAX`/`SELL_RSI_MIN`
+  (read live from `scanner.py`, so it can't drift from what's deployed)
+  against a fresh 300-bar window, using the continuous-EMA methodology
+  below. Flags a negative aggregate, an outlier-driven result
+  (leave-one-symbol-out flips sign), or a >50% expectancy drop since the
+  last run.
+
+**Real finding while building this, 2026-07-16 — live/backtest EMA
+methodology gap, unreconciled:** every backtest on this page (including
+today's SELL_RSI_MIN change) computes one continuous EMA9/EMA21 series
+over the whole fetched window. But `OpportunityScanner._analyze` — the
+actual live code — calls `get_bars(symbol, limit=35)` fresh on every
+single check and computes EMA9/21 from scratch on just those 35 bars each
+time, with **no continuity between checks** (each call's EMA "seed" is a
+plain average of whichever 9/21 bars happen to be first in that day's
+35-bar window). Tested both against identical live data the same day:
+continuous EMA reproduced the documented 65/80 result almost exactly (26
+trades, +1.352%/trade, leave-one-out +0.71% to +1.89% — matches
+"not outlier-driven"); the literal 35-bar-window-per-check version gave a
+materially different, weaker, outlier-driven result (19 trades,
++0.914%/trade, flips negative excluding AAPL). `strategy_check.py`
+deliberately uses the continuous version to stay comparable with this
+page's history, **not** because it's confirmed to be what the live bot
+does — it isn't. Whether this materially affects real trading (vs. being
+a backtest-only artifact) is unverified. Kevin's call: investigate further
+(e.g., quantify how often the two methodologies would have signaled
+differently), change `scanner.py` to carry EMA state between checks
+(a real behavior change, needs its own backtest-before-deploy per every
+other threshold on this page), or leave as-is.
+
 ## Open items — real, deliberately not acted on
 
+- **Live scanner's per-check EMA windowing doesn't match the backtest
+  methodology that validated its own thresholds** — see "Automated
+  monitoring" above for the full write-up. Not yet investigated further
+  or fixed; changing `scanner.py`'s EMA calculation would be a real
+  behavior change needing its own backtest first.
 - **`adjust_strategy()` (`trader.py`) mutates `STOP_LOSS_THRESHOLD` and
   `REENTRY_THRESHOLD` at runtime** based on win/loss streak (3 consecutive)
   and equity-change-vs-`INITIAL_EQUITY`, with **no backtest behind this
