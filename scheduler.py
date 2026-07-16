@@ -75,8 +75,14 @@ class MarketHoursScheduler:
             performance = self.trading_manager.analyze_performance()
             report['performance'] = performance
 
-            strategy_report = self.trading_manager.adjust_strategy()
-            report['strategy_adjustment'] = strategy_report
+            # adjust_strategy() (win/loss-streak + equity-swing driven mutation of
+            # STOP_LOSS_THRESHOLD/REENTRY_THRESHOLD) is deliberately NOT called here as
+            # of 2026-07-16 -- a full-system backtest (real entries/exits/stops, 300
+            # daily bars, ~14 months, test-account sizing) found it underperformed
+            # fixed thresholds (+6.66% vs +7.65% total return) while firing often (17
+            # threshold changes across 25 closed trades). See STRATEGY.md "Automated
+            # monitoring" / trader.py: adjust_strategy() docstring. Method left intact,
+            # not deleted -- Kevin may revisit with a more robust multi-window backtest.
 
             # Keep only last 100 checks
             if len(self.check_history) > 100:
@@ -87,9 +93,6 @@ class MarketHoursScheduler:
                 logger.info(f"Actions: {len(report['actions_taken'])} recommendation(s)")
                 for action in report['actions_taken']:
                     logger.info(f"  - {action.get('action')}: {action.get('symbol')} - {action.get('recommendation')}")
-
-            if strategy_report.get('changes_made'):
-                logger.info(f"Strategy adjustments applied: {strategy_report.get('changes_made')}")
 
             if report.get('errors'):
                 logger.warning(f"Errors: {report['errors']}")

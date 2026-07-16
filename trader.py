@@ -419,7 +419,15 @@ class TradingManager:
             return {'error': str(e)}
     
     def adjust_strategy(self) -> Dict:
-        """Dynamically adjust strategy parameters based on performance"""
+        """Dynamically adjust strategy parameters based on performance.
+
+        NOT called from scheduler.py as of 2026-07-16 -- a full-system backtest
+        (real entries/exits/stops, 300 daily bars, ~14 months, test-account sizing)
+        found this underperformed fixed thresholds (+6.66% vs +7.65% total return)
+        while firing often (17 threshold changes across 25 closed trades). Left
+        intact rather than deleted since a more robust multi-window backtest could
+        still justify re-enabling it. See STRATEGY.md "Automated monitoring".
+        """
         try:
             account = self.client.get_account()
             current_equity = float(account.get('equity', settings.INITIAL_EQUITY))

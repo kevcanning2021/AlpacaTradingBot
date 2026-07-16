@@ -43,7 +43,13 @@ MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '5'))               # Max concurr
 
 # Crypto Scanner (runs 24/7, independent of stock market hours — see scheduler.py)
 CRYPTO_WATCHLIST = [s.strip() for s in os.getenv('CRYPTO_WATCHLIST', 'BTC/USD,ETH/USD').split(',') if s.strip()]
-CRYPTO_CHECK_INTERVAL_MINUTES = int(os.getenv('CRYPTO_CHECK_INTERVAL_MINUTES', '60'))
+# Was 60. Tightened 2026-07-16 -- a stop-loss/trailing-stop breach between checks was
+# caught late, at whatever price prevailed next, not at the threshold, and this now
+# trades real money on the production account (not just the test account). No .env
+# override on either service, so this default applies to both. 15 (not stock's 5)
+# because crypto's stop-loss/trailing-stop are already wider (15%/20%) specifically
+# to tolerate crypto's higher ordinary volatility -- doesn't need as tight a loop.
+CRYPTO_CHECK_INTERVAL_MINUTES = int(os.getenv('CRYPTO_CHECK_INTERVAL_MINUTES', '15'))
 CRYPTO_POSITION_SIZE_USD = float(os.getenv('CRYPTO_POSITION_SIZE_USD', '500'))
 CRYPTO_MAX_POSITIONS = int(os.getenv('CRYPTO_MAX_POSITIONS', '2'))
 # Separate from STOP_LOSS_THRESHOLD/TRAILING_STOP_THRESHOLD: those were backtested only
