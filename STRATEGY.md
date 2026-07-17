@@ -44,8 +44,8 @@ touch each other's positions.
 
 | Threshold | Value (stock / crypto) | Location | Last verified |
 |---|---|---|---|
-| `BUY_RSI_MAX` | 65 / 65 | `scanner.py` | 2026-07-16 backtest |
-| `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 backtest |
+| `BUY_RSI_MAX` | 65 / 65 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
+| `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
 | `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest |
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
@@ -71,6 +71,26 @@ in 50-58% of all possible 20-day holding windows (backtested against 100
 real BTC/USD & ETH/USD daily bars, 2026-07-13). 20%/15% cuts that to
 8-16% — comparable to what 8% achieved for stocks over the stock-tuned 5%.
 Same "cut most, not all" philosophy, not zero false trips by design.
+
+**`BUY_RSI_MAX`/`SELL_RSI_MIN` never had a crypto-specific backtest until
+2026-07-17 — gap found by the Strategy Review routine, then closed.**
+Unlike stop-loss/trailing-stop/re-entry above (each explicitly backtested
+against real BTC/USD & ETH/USD bars), the RSI thresholds applied to crypto
+by default inheritance — the 07-16 backtest that produced 65/80 only ever
+walked the stock watchlist. Grid-searched `BUY_RSI_MAX` × `SELL_RSI_MIN`
+against 300 real BTC/USD & ETH/USD daily bars (same continuous-EMA
+methodology): current 65/80 is **not contradicted** — 6 trades,
++0.999%/trade, 50% win, and its leave-one-out is tight (BTC/USD +0.99%,
+ETH/USD +1.00%, meaning both symbols agree with the aggregate). A couple
+of other combos in the grid showed higher raw expectancy (65/70:
++2.172%/trade; 60/80: +3.030%/trade) but on thinner samples (6 and 4
+trades) with much wider leave-one-out spread between the two symbols —
+the exact small-sample/single-symbol-driven pattern Lesson #10 already
+warns against, so not treated as a better answer. **Caveat**: this whole
+grid tops out at 9 trades total (2 symbols vs. the stock backtest's 7),
+nowhere near as robust as the stock-side validation — "not contradicted,"
+not "independently re-derived as optimal." Revisit once more crypto
+trades accumulate.
 
 **Re-entry threshold (5% / 12.5%)**: crypto's value must stay strictly
 below `CRYPTO_TRAILING_STOP_THRESHOLD` (20%), not equal to it —
