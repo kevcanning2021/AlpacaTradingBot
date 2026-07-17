@@ -94,10 +94,17 @@ def check_account(seen_order_ids):
         source = o.get('source')
         side = o.get('side')
         symbol = o.get('symbol')
-        if source != 'access_key':
-            issues.append((f'unattributed_order:{oid}', f'Order {oid} ({side} {symbol}) has source="{source}", not the bot\'s own key — check if trader.py\'s win/loss-streak tracking missed a real trade'))
-        elif side == 'sell':
+        # close_position() (DELETE /positions/{symbol} -- every stop-loss/trailing-stop/
+        # scanner-sell exit) returns source=None on Alpaca's paper API, unlike
+        # create_order() (POST /orders -- every buy) which returns 'access_key'. Confirmed
+        # 2026-07-17 via order 6a00a285-dbd8-4ee7-86e5-0e0f281a8841, a real stop-loss close
+        # verified against VPS logs -- not a sign of an unattributed order, just how Alpaca
+        # tags DELETE-based liquidations. Only flag a sell as unattributed if its source is
+        # something else entirely (neither None nor our own key).
+        if side == 'sell' and source in (None, 'access_key'):
             issues.append((f'bot_sell:{oid}', f'Bot placed a SELL on {symbol} (order {oid}) — likely a stop-loss/trailing-stop/scanner exit firing'))
+        elif source != 'access_key':
+            issues.append((f'unattributed_order:{oid}', f'Order {oid} ({side} {symbol}) has source="{source}", not the bot\'s own key — check if trader.py\'s win/loss-streak tracking missed a real trade'))
 
     return issues, new_order_ids
 
