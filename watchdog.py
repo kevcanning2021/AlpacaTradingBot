@@ -95,12 +95,16 @@ def check_account(seen_order_ids):
         side = o.get('side')
         symbol = o.get('symbol')
         # close_position() (DELETE /positions/{symbol} -- every stop-loss/trailing-stop/
-        # scanner-sell exit) returns source=None on Alpaca's paper API, unlike
-        # create_order() (POST /orders -- every buy) which returns 'access_key'. Confirmed
-        # 2026-07-17 via order 6a00a285-dbd8-4ee7-86e5-0e0f281a8841, a real stop-loss close
-        # verified against VPS logs -- not a sign of an unattributed order, just how Alpaca
-        # tags DELETE-based liquidations. Only flag a sell as unattributed if its source is
-        # something else entirely (neither None nor our own key).
+        # scanner-sell exit) returns source=None on Alpaca's paper API immediately after
+        # fill, unlike create_order() (POST /orders -- every buy) which returns
+        # 'access_key' right away. TRANSIENT, not permanent: order 6a00a285-... (the
+        # 2026-07-17 stop-loss close this was built from) showed source=None when checked
+        # minutes after fill, then 'access_key' when re-checked 2026-07-21 -- Alpaca
+        # apparently backfills/reconciles this field sometime after the close, on its own
+        # schedule. Doesn't change the fix: watchdog runs every 15 min and evaluates each
+        # order on first sighting, when the field is still most likely None. Only flag a
+        # sell as unattributed if its source is something else entirely (neither None nor
+        # our own key).
         if side == 'sell' and source in (None, 'access_key'):
             issues.append((f'bot_sell:{oid}', f'Bot placed a SELL on {symbol} (order {oid}) — likely a stop-loss/trailing-stop/scanner exit firing'))
         elif source != 'access_key':
