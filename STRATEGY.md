@@ -140,6 +140,41 @@ watchlist, using the exact live scanner logic:
   systematic screen across dozens of candidates, not another hand-picked
   handful) — see the open item below.
 
+- **Wider watchlist, attempt 3: systematic 59-candidate screen**, tested
+  2026-07-23. Screened a broad, diverse set of liquid large/mid-caps
+  across sectors (not hand-picked for a theory this time), kept only
+  candidates with a positive standalone edge (≥3 trades) AND a positive
+  marginal contribution when added to the current 7 — 14 survived both
+  filters (CAT, ADI, LRCX, IWM, AXP, INTC, LLY, BAC, C, MRK, GS, LMT, HD,
+  CSCO). In-sample this looked dramatically better: 86 trades,
+  +3.209%/trade, 55.8% win vs. baseline's +1.496%/trade, 48.1% win — and
+  passed leave-one-out cleanly (never went negative excluding any one
+  symbol). **Looked great and was wrong.** Re-tested against a genuine
+  holdout the screen never saw (an older, non-overlapping 300-bar window,
+  roughly 2024-02 to 2025-04, vs. the ~2025-04-to-2026-07 window the
+  screen actually ran on): baseline alone still positive (+1.258%/trade),
+  but baseline + the 14 "survivors" **underperformed baseline alone**
+  (+0.909%/trade) on that unseen period. The in-sample edge was
+  curve-fitting from searching 59 candidates on one window, not a real
+  pattern — leave-one-out only catches one outlier symbol propping up an
+  aggregate, it does NOT catch an entire selection process overfitting to
+  the window it was run on. **Not implemented.**
+  **Methodological lesson for any future systematic screen**: reserve a
+  genuine out-of-sample holdout *before* selecting candidates, never
+  select and validate on the same window — this applies beyond watchlist
+  screens to any future backtest that searches across many candidates
+  (parameters, symbols, timeframes) rather than testing one specific
+  hypothesis.
+  **Three independent widening attempts (high-beta names, blue-chip
+  names, systematic screen) have now all failed** to beat the current
+  7-symbol watchlist. This is a reasonably strong signal that this
+  specific 7-symbol combination is close to a local optimum for this
+  exact strategy, not that watchlist search is inherently hopeless — a
+  future attempt would need either a properly out-of-sample-validated
+  screen from the start, or a fundamentally different approach (e.g.
+  correlation/sector diversification analysis instead of pure backtest
+  performance).
+
 ## Automated monitoring: `strategy_check.py`
 
 A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
