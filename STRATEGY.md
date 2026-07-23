@@ -122,6 +122,23 @@ watchlist, using the exact live scanner logic:
   lookback); naive swap and rescaled-period variants were both worse than
   daily bars, and the rescaled version's apparent edge was entirely one
   outlier symbol (GOOGL) — negative once excluded.
+- **Wider watchlist, attempt 2: smooth-trending blue chips** (META, AVGO,
+  COST, JPM, V, MA, WMT), tested 2026-07-23 specifically to rule out
+  "high-beta was the problem" from attempt 1 above. Same failure mode
+  anyway: added individually to the current 7, **every single one**
+  reduced the combined expectancy (best case JPM: +1.461%/trade vs.
+  baseline's +1.496%; worst case AVGO: +0.810%/trade, down from just 2
+  trades at -8.448%/trade standalone). All 14 combined: +0.470%/trade
+  (43.6% win) vs. the current watchlist's +1.496%/trade (48.1% win) alone.
+  Not outlier-driven this time either (leave-one-out on the combined set
+  never went negative) — it's a broad-based dilution, not one bad symbol.
+  **Two independent widening attempts, two different symbol-selection
+  theories, both failed** — this specific 7-symbol combination has an
+  edge that doesn't obviously transfer by adding more names, regardless
+  of volatility character. Don't re-propose "just add more symbols"
+  again without a fundamentally different rationale (e.g. a large
+  systematic screen across dozens of candidates, not another hand-picked
+  handful) — see the open item below.
 
 ## Automated monitoring: `strategy_check.py`
 
