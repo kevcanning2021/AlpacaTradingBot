@@ -150,7 +150,13 @@ class TradingManager:
                 if not closed and settings.ENABLE_REENTRY:
                     buying_power = self._handle_reentry(symbol, position, pnl_pct, report, buying_power)
 
-            if report['actions_taken'] and self.notifier.enabled:
+            # REENTRY_SKIPPED means the bot analyzed a pullback and decided NOT to act --
+            # no trade, no error, nothing changed. Notifying on that is noise, not signal
+            # (same reasoning that removed the STOP_LOSS_CANDIDATE advisory on 2026-07-14).
+            # Every other action type here is either a real trade open/close (*_TRIGGERED)
+            # or a genuine failure (*_ALERT, REENTRY_FAILED), so those still notify.
+            notifiable = [a for a in report['actions_taken'] if a.get('action') != 'REENTRY_SKIPPED']
+            if notifiable and self.notifier.enabled:
                 try:
                     subject, body = self.notifier.build_position_alert_email(report)
                     self.notifier.send(subject, body)
@@ -634,11 +640,3 @@ class TradingManager:
                 logger.error(f'Failed to send trade email: {e}')
 
         return result
-
-    def build_daily_report(self) -> Dict:
-        """Build a combined account status + performance summary for the daily report email."""
-        return {
-            'timestamp': _now(),
-            'status': self.get_trading_status(),
-            'performance': self.analyze_performance()
-        }

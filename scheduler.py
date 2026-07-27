@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Dict
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
 import pytz
 from trader import TradingManager
 from config.settings import (
@@ -136,22 +135,6 @@ class MarketHoursScheduler:
         except Exception as e:
             logger.error(f"Error in crypto position check job: {e}")
 
-    def _send_daily_report_job(self):
-        """Job that emails a daily account status report."""
-        logger.info("=" * 60)
-        logger.info("Sending daily status report...")
-
-        try:
-            report = self.trading_manager.build_daily_report()
-            if self.trading_manager.notifier.enabled:
-                subject, body = self.trading_manager.notifier.build_daily_report_email(report)
-                self.trading_manager.notifier.send(subject, body)
-                logger.info("Daily status report email sent successfully")
-            else:
-                logger.info("Email notifications disabled; skipping daily report email")
-        except Exception as e:
-            logger.error(f"Error sending daily report: {e}")
-
     def start(self):
         """Start the market hours scheduler"""
         if self.is_running:
@@ -179,20 +162,6 @@ class MarketHoursScheduler:
                 replace_existing=True
             )
 
-            daily_trigger = CronTrigger(
-                hour=MARKET_OPEN_HOUR,
-                minute=MARKET_OPEN_MINUTE,
-                day_of_week='mon-fri',
-                timezone=TIMEZONE
-            )
-            self.scheduler.add_job(
-                self._send_daily_report_job,
-                trigger=daily_trigger,
-                id='daily_report',
-                name='Daily Status Report Email',
-                replace_existing=True
-            )
-
             self.scheduler.start()
             self.is_running = True
             logger.info("=" * 60)
@@ -200,7 +169,6 @@ class MarketHoursScheduler:
             logger.info(f"Market hours: {MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} - {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} ET")
             logger.info(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes (Mon-Fri only)")
             logger.info(f"Crypto watchlist: {CRYPTO_WATCHLIST} — checked every {CRYPTO_CHECK_INTERVAL_MINUTES} minutes, 24/7")
-            logger.info(f"Daily report: at market open ({MARKET_OPEN_HOUR:02d}:{MARKET_OPEN_MINUTE:02d} {TIMEZONE}, Mon-Fri)")
             logger.info("=" * 60)
         
         except Exception as e:

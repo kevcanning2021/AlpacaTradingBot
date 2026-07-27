@@ -81,31 +81,3 @@ class WhatsAppNotifier:
             lines.append('Errors: ' + ', '.join(scan_report['errors']))
 
         return subject, '\n'.join(lines)
-
-    def build_daily_report_email(self, report: dict) -> Tuple[str, str]:
-        status = report.get('status', {})
-        performance = report.get('performance', {})
-        subject = f"Daily Report - {report.get('timestamp')}"
-
-        positions = status.get('positions') or []
-        pos_lines = []
-        for pos in positions:
-            pnl = float(pos.get('unrealized_pl', 0))
-            pnl_pct = float(pos.get('unrealized_plpc', 0)) * 100
-            pos_lines.append(
-                f"  {pos.get('symbol')}: {pos.get('qty')} shares"
-                f" | P&L ${pnl:.2f} ({pnl_pct:.2f}%)"
-            )
-
-        body = '\n'.join(filter(None, [
-            f"Equity: ${status.get('equity', 'N/A')}",
-            f"Buying Power: ${status.get('buying_power', 'N/A')}",
-            f"Open Positions: {status.get('open_positions', 0)}",
-            '\n'.join(pos_lines) if pos_lines else None,
-            '',
-            f"Total P&L: ${performance.get('total_pnl', 0):.2f}",
-            f"Account Return: {performance.get('account_return', 0):.2f}%",
-            f"Win streak: {performance.get('win_streak', 0)} | Loss streak: {performance.get('loss_streak', 0)}",
-        ]))
-
-        return subject, body
