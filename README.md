@@ -120,7 +120,7 @@ Exiting...
 
 ## Notifications
 
-Trade executions, strategy adjustments, and a daily account status report can be sent via WhatsApp (`whatsapp_notifier.py`, using [CallMeBot](https://www.callmebot.com/)), set via `.env`:
+Real trade opens/closes (scanner buys/sells, stop-loss/trailing-stop/re-entry triggers) and genuine operational errors (a close/order that failed) are sent via WhatsApp (`whatsapp_notifier.py`, using [CallMeBot](https://www.callmebot.com/)), set via `.env`. As of 2026-07-27, purely informational events — a daily status report, or `_handle_reentry` analyzing a pullback and deciding not to act (`REENTRY_SKIPPED`) — no longer notify; only real trades and errors do.
 
 - `WHATSAPP_ENABLED=true`
 - `WHATSAPP_PHONE` — international format without `+`, e.g. `27831234567`

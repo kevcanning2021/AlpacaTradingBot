@@ -79,8 +79,12 @@ worth avoiding overlap with market hours if doing a lot of local pulls).
   whatever gain the trailing stop was supposed to be protecting.
 - `win_streak`/`loss_streak` (`trader.py: _record_trade_outcome`) are
   **still in-memory only**, not persisted — a restart resets the streak
-  count to 0. Display-only in the daily report as of 2026-07-16 (see
-  below), so lower stakes than when they drove live threshold mutation.
+  count to 0. No longer drives any live behavior or notification as of
+  2026-07-27 (the daily WhatsApp report that displayed them was removed;
+  `adjust_strategy()`, the only thing that ever acted on them, was
+  already disabled 2026-07-17) — still returned by `analyze_performance()`
+  for `cli.py`/dashboard-style consumers, but that's the only remaining
+  use.
 - Streaks update only when a position actually closes with a realized
   P&L, not from the concurrent unrealized-P&L direction of whatever's
   open (fixed 2026-07-09 — two correlated positions dipping together used
