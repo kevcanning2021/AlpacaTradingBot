@@ -74,41 +74,53 @@ def check_new_log_errors(since_iso):
 
 
 def check_account(seen_order_ids):
+    """Checks positions and orders independently -- a failure fetching one (e.g. a
+    transient Alpaca API timeout) must not skip the other, and must not crash the
+    whole script before check_services()/check_new_log_errors() even run. Each
+    failure becomes its own cooldown-managed issue instead of an unhandled
+    exception, so a rough API patch is reported once (like any other issue here),
+    not silently swallowed by the process dying."""
     issues = []
     new_order_ids = set(seen_order_ids)
     client = AlpacaClient()
 
-    for p in client.get_positions():
-        pnl_pct = float(p['unrealized_plpc'])
-        symbol = p['symbol']
-        if pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
-            issues.append((f'stop_loss_breach:{symbol}', f'{symbol} is down {pnl_pct * 100:.1f}% — past the {settings.STOP_LOSS_THRESHOLD * 100:.0f}% stop-loss threshold'))
+    try:
+        for p in client.get_positions():
+            pnl_pct = float(p['unrealized_plpc'])
+            symbol = p['symbol']
+            if pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
+                issues.append((f'stop_loss_breach:{symbol}', f'{symbol} is down {pnl_pct * 100:.1f}% — past the {settings.STOP_LOSS_THRESHOLD * 100:.0f}% stop-loss threshold'))
+    except Exception as e:
+        issues.append(('api_error:positions', f'Failed to fetch positions from Alpaca: {e}'))
 
-    for o in client.get_orders():
-        oid = o.get('id')
-        if not oid or oid in seen_order_ids:
-            continue
-        new_order_ids.add(oid)
-        if oid in KNOWN_MANUAL_ORDER_IDS:
-            continue
-        source = o.get('source')
-        side = o.get('side')
-        symbol = o.get('symbol')
-        # close_position() (DELETE /positions/{symbol} -- every stop-loss/trailing-stop/
-        # scanner-sell exit) returns source=None on Alpaca's paper API immediately after
-        # fill, unlike create_order() (POST /orders -- every buy) which returns
-        # 'access_key' right away. TRANSIENT, not permanent: order 6a00a285-... (the
-        # 2026-07-17 stop-loss close this was built from) showed source=None when checked
-        # minutes after fill, then 'access_key' when re-checked 2026-07-21 -- Alpaca
-        # apparently backfills/reconciles this field sometime after the close, on its own
-        # schedule. Doesn't change the fix: watchdog runs every 15 min and evaluates each
-        # order on first sighting, when the field is still most likely None. Only flag a
-        # sell as unattributed if its source is something else entirely (neither None nor
-        # our own key).
-        if side == 'sell' and source in (None, 'access_key'):
-            issues.append((f'bot_sell:{oid}', f'Bot placed a SELL on {symbol} (order {oid}) — likely a stop-loss/trailing-stop/scanner exit firing'))
-        elif source != 'access_key':
-            issues.append((f'unattributed_order:{oid}', f'Order {oid} ({side} {symbol}) has source="{source}", not the bot\'s own key — check if trader.py\'s win/loss-streak tracking missed a real trade'))
+    try:
+        for o in client.get_orders():
+            oid = o.get('id')
+            if not oid or oid in seen_order_ids:
+                continue
+            new_order_ids.add(oid)
+            if oid in KNOWN_MANUAL_ORDER_IDS:
+                continue
+            source = o.get('source')
+            side = o.get('side')
+            symbol = o.get('symbol')
+            # close_position() (DELETE /positions/{symbol} -- every stop-loss/trailing-stop/
+            # scanner-sell exit) returns source=None on Alpaca's paper API immediately after
+            # fill, unlike create_order() (POST /orders -- every buy) which returns
+            # 'access_key' right away. TRANSIENT, not permanent: order 6a00a285-... (the
+            # 2026-07-17 stop-loss close this was built from) showed source=None when checked
+            # minutes after fill, then 'access_key' when re-checked 2026-07-21 -- Alpaca
+            # apparently backfills/reconciles this field sometime after the close, on its own
+            # schedule. Doesn't change the fix: watchdog runs every 15 min and evaluates each
+            # order on first sighting, when the field is still most likely None. Only flag a
+            # sell as unattributed if its source is something else entirely (neither None nor
+            # our own key).
+            if side == 'sell' and source in (None, 'access_key'):
+                issues.append((f'bot_sell:{oid}', f'Bot placed a SELL on {symbol} (order {oid}) — likely a stop-loss/trailing-stop/scanner exit firing'))
+            elif source != 'access_key':
+                issues.append((f'unattributed_order:{oid}', f'Order {oid} ({side} {symbol}) has source="{source}", not the bot\'s own key — check if trader.py\'s win/loss-streak tracking missed a real trade'))
+    except Exception as e:
+        issues.append(('api_error:orders', f'Failed to fetch orders from Alpaca: {e}'))
 
     return issues, new_order_ids
 
