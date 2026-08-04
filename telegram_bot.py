@@ -21,6 +21,8 @@ import urllib.error
 
 from alpaca_client import AlpacaClient
 from config import settings
+from scanner import OpportunityScanner
+from strategy_check import _backtest_watchlist
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ HELP_TEXT = (
     "/status - equity, cash, buying power, open positions\n"
     "/positions - detailed open position list\n"
     "/history - last 10 closed trades\n"
+    "/backtest - re-run today's BUY_RSI_MAX/SELL_RSI_MIN backtest now\n"
     "/help - this message"
 )
 
@@ -115,6 +118,29 @@ def format_history() -> str:
     return '\n'.join(reversed(lines))
 
 
+def run_backtest(client: AlpacaClient) -> str:
+    """Re-runs the exact same backtest strategy_check.py already does once/day
+    (BUY_RSI_MAX/SELL_RSI_MIN, current live thresholds, continuous-EMA methodology
+    -- see strategy_check.py's module docstring), on demand instead of waiting for
+    the daily cron. Read-only: this is analysis only, never touches live thresholds
+    or places any order. Not a systematic/multi-candidate search -- see STRATEGY.md
+    "Rejected hypotheses" for why that kind of test needs careful out-of-sample
+    review, not a one-tap command."""
+    lines = [f"BUY_RSI_MAX={OpportunityScanner.BUY_RSI_MAX}, SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}", '']
+    for label, watchlist in (('Stock', settings.WATCHLIST), ('Crypto', settings.CRYPTO_WATCHLIST)):
+        if not watchlist:
+            continue
+        result = _backtest_watchlist(client, watchlist)
+        if result is None:
+            lines.append(f"{label}: no trades in this window")
+            continue
+        lines.append(
+            f"{label}: {result['trade_count']} trades, "
+            f"{result['expectancy_pct']:+.3f}%/trade, {result['win_rate_pct']:.1f}% win"
+        )
+    return '\n'.join(lines)
+
+
 def handle_command(text: str, chat_id: str, client: AlpacaClient):
     command = text.strip().split()[0].lower() if text.strip() else ''
     try:
@@ -124,6 +150,9 @@ def handle_command(text: str, chat_id: str, client: AlpacaClient):
             send_message(chat_id, format_positions(client))
         elif command == '/history':
             send_message(chat_id, format_history())
+        elif command == '/backtest':
+            send_message(chat_id, 'Running backtest against fresh data, one moment...')
+            send_message(chat_id, run_backtest(client))
         elif command == '/help' or command == '/start':
             send_message(chat_id, HELP_TEXT)
         else:
