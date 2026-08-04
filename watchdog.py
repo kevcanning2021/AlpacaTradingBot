@@ -21,7 +21,7 @@ from telegram_notifier import TelegramNotifier
 from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'watchdog_state.json')
-SERVICES = ['alpaca-bot.service', 'alpaca-bot-test.service', 'alpaca-dashboard.service']
+SERVICES = ['alpaca-bot.service', 'alpaca-bot-test.service', 'alpaca-dashboard.service', 'alpaca-telegram-bot.service']
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 
 # Orders already investigated and confirmed not to be bugs — don't re-flag them.
