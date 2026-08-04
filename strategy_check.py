@@ -9,7 +9,7 @@ Claude Code session — same reasoning as watchdog.py: the existing hourly
 (persistently network-blocked in that sandbox), so it can never actually
 backtest. Only the VPS (and a dev/interactive session) has real bar access.
 
-Two checks, both alert-only via WhatsApp (never trades, never edits
+Two checks, both alert-only via Telegram (never trades, never edits
 thresholds) with the same cooldown/state pattern as watchdog.py:
 
 - Hourly: re-run the live scanner against the whole watchlist. Flags a
@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 
 from alpaca_client import AlpacaClient, position_symbol
 from scanner import OpportunityScanner, _compute_ema, _compute_rsi
-from whatsapp_notifier import WhatsAppNotifier
+from telegram_notifier import TelegramNotifier
 from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_check_state.json')
@@ -301,7 +301,7 @@ def main():
             del active[key]
 
     if messages:
-        WhatsAppNotifier().send('AlpacaTradingBot Strategy Check', '\n\n'.join(messages))
+        TelegramNotifier().send('AlpacaTradingBot Strategy Check', '\n\n'.join(messages))
 
     state['active_alerts'] = active
     save_state(state)

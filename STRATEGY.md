@@ -179,7 +179,7 @@ watchlist, using the exact live scanner logic:
 
 A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
 2026-07-16 in direct service of this doc's stated goal. Alert-only —
-never trades, never edits thresholds — via the same WhatsApp/cooldown
+never trades, never edits thresholds — via the same Telegram/cooldown
 pattern as `watchdog.py`:
 
 - **Hourly**: re-runs `OpportunityScanner.scan()` against the live

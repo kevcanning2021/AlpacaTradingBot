@@ -1,5 +1,5 @@
 """Standalone VPS watchdog for the test account: checks service health, log errors,
-and account state; sends a WhatsApp alert only when something's actually wrong.
+and account state; sends a Telegram alert only when something's actually wrong.
 
 Meant to run via crontab every 15 min on the VPS itself, independent of any
 Claude Code session — see KNOWN_LIMITATIONS.md / project notes for why this
@@ -17,7 +17,7 @@ import subprocess
 from datetime import datetime, timezone
 
 from alpaca_client import AlpacaClient
-from whatsapp_notifier import WhatsAppNotifier
+from telegram_notifier import TelegramNotifier
 from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'watchdog_state.json')
@@ -154,7 +154,7 @@ def main():
             del active[key]
 
     if messages:
-        WhatsAppNotifier().send('AlpacaTradingBot Watchdog', '\n\n'.join(messages))
+        TelegramNotifier().send('AlpacaTradingBot Watchdog', '\n\n'.join(messages))
 
     state['active_alerts'] = active
     state['seen_order_ids'] = list(seen_order_ids)

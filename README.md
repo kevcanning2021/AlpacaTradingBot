@@ -120,13 +120,13 @@ Exiting...
 
 ## Notifications
 
-Real trade opens/closes (scanner buys/sells, stop-loss/trailing-stop/re-entry triggers) and genuine operational errors (a close/order that failed) are sent via WhatsApp (`whatsapp_notifier.py`, using [CallMeBot](https://www.callmebot.com/)), set via `.env`. As of 2026-07-27, purely informational events — a daily status report, or `_handle_reentry` analyzing a pullback and deciding not to act (`REENTRY_SKIPPED`) — no longer notify; only real trades and errors do.
+Real trade opens/closes (scanner buys/sells, stop-loss/trailing-stop/re-entry triggers) and genuine operational errors (a close/order that failed) are sent via Telegram (`telegram_notifier.py`, using the [Telegram Bot API](https://core.telegram.org/bots/api)), set via `.env`. Purely informational events — a daily status report, or `_handle_reentry` analyzing a pullback and deciding not to act (`REENTRY_SKIPPED`) — don't notify; only real trades and errors do.
 
-- `WHATSAPP_ENABLED=true`
-- `WHATSAPP_PHONE` — international format without `+`, e.g. `27831234567`
-- `WHATSAPP_APIKEY` — API key issued by CallMeBot
+- `TELEGRAM_ENABLED=true`
+- `TELEGRAM_BOT_TOKEN` — from [@BotFather](https://t.me/BotFather)
+- `TELEGRAM_CHAT_ID` — your personal chat ID with the bot
 
-`email_notifier.py` (SMTP-based) still exists in the repo but `trader.py` no longer instantiates it — `EMAIL_*` settings currently have no effect.
+Switched from WhatsApp (via CallMeBot) to Telegram on 2026-08-04 after CallMeBot's free quota ran out. `whatsapp_notifier.py` still exists (kept for reference/rollback) but nothing instantiates it anymore — `WHATSAPP_*` settings currently have no effect. `email_notifier.py` (SMTP-based) also still exists in the repo but `trader.py` no longer instantiates it — `EMAIL_*` settings currently have no effect.
 
 ## Deployment
 

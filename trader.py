@@ -6,7 +6,7 @@ from typing import Dict, Optional
 import pytz
 from alpaca_client import AlpacaClient, position_symbol
 from config import settings
-from whatsapp_notifier import WhatsAppNotifier
+from telegram_notifier import TelegramNotifier
 from scanner import OpportunityScanner, _compute_rsi
 
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +39,7 @@ class TradingManager:
 
     def __init__(self):
         self.client = AlpacaClient()
-        self.notifier = WhatsAppNotifier()
+        self.notifier = TelegramNotifier()
         self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
         self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
@@ -205,7 +205,7 @@ class TradingManager:
             # (No separate "up" branch here — the independent trailing stop already
             # protects gains above threshold; a duplicate advisory used to fire on
             # every single check for as long as the position stayed elevated, which
-            # meant an hourly notification email/WhatsApp message for every winning
+            # meant an hourly notification message for every winning
             # position once notifications are enabled.)
             if pnl_pct <= -threshold:
                 closed = False

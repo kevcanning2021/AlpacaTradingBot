@@ -26,7 +26,7 @@ integration, reuses the same WhatsApp/CallMeBot env vars.
 
 Added 2026-07-16, root crontab on the VPS (`0 * * * *`, test account only,
 `/opt/alpaca-bot-test`), logs to `/var/log/alpaca-strategy-check.log`.
-Alert-only (WhatsApp, same cooldown pattern as `watchdog.py`) — never
+Alert-only (Telegram, same cooldown pattern as `watchdog.py`) — never
 trades, never edits thresholds. Hourly: re-runs the live scanner for a
 signal-health check. Daily, after close: re-backtests `BUY_RSI_MAX`/
 `SELL_RSI_MIN` against fresh bars. Building it surfaced a real gap between
@@ -55,7 +55,7 @@ but the trading strategy logic and thresholds are visible to anyone.
 
 ## Credential storage
 
-The Alpaca API key/secret, Gmail app password, and CallMeBot WhatsApp key
+The Alpaca API key/secret, Gmail app password, and Telegram bot token
 are stored in plaintext in each service's own `.env` (VPS, root-only,
 `chmod 600`) — no dedicated secrets manager. Low risk for a single-user
 paper-trading account, but not a hardened setup. SSH access to the VPS

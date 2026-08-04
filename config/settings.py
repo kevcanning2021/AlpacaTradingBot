@@ -74,10 +74,18 @@ CRYPTO_TRAILING_STOP_THRESHOLD = float(os.getenv('CRYPTO_TRAILING_STOP_THRESHOLD
 # = 5%/8% = 0.625, applied to crypto's 20%: 0.625 * 0.20 = 0.125) rather than a new guess.
 CRYPTO_REENTRY_THRESHOLD = float(os.getenv('CRYPTO_REENTRY_THRESHOLD', '0.125'))
 
-# WhatsApp Notifications (via CallMeBot)
+# WhatsApp Notifications (via CallMeBot) -- kept for reference/rollback, but the
+# live notifier switched to Telegram 2026-08-04 after CallMeBot's free quota ran
+# out. WHATSAPP_ENABLED should stay false on every deployed .env going forward.
 WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'
 WHATSAPP_PHONE = os.getenv('WHATSAPP_PHONE', '')    # International format without +, e.g. 27831234567
 WHATSAPP_APIKEY = os.getenv('WHATSAPP_APIKEY', '')  # API key received from CallMeBot
+
+# Telegram Notifications (via the Telegram Bot API) -- the active notifier as of
+# 2026-08-04. Free, no message quota.
+TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true'
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')  # from @BotFather
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')      # your personal chat ID with the bot
 
 # Email Notifications
 EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
