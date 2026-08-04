@@ -130,4 +130,4 @@ Switched from WhatsApp (via CallMeBot) to Telegram on 2026-08-04 after CallMeBot
 
 ## Deployment
 
-See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for how this is deployed (systemd on a VPS) and its current limitations.
+See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for how this is deployed (systemd on a VPS) and its current limitations, and [LESSONS.md](LESSONS.md) for durable mistakes-to-never-repeat from this project's history.
