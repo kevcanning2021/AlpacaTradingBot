@@ -194,6 +194,68 @@ class AlpacaClient:
             logger.error(f"[get_bars] Failed to fetch bars for {symbol}: {e}")
             return []
 
+    def get_bars_multi(self, symbols: List[str], timeframe: str = '1Day', limit: int = 35) -> Dict[str, List[Dict]]:
+        """Same semantics as get_bars() per symbol (trims a still-forming final bar,
+        returns the most recent `limit` bars), but fetches every symbol in one batched
+        request instead of N serial round trips — Alpaca's bars endpoint accepts a
+        comma-separated `symbols` list and groups the response by symbol (confirmed
+        against Alpaca's docs, same grouped shape the single-symbol crypto path already
+        handled). All `symbols` must be the same asset class (all crypto or all stock);
+        callers with a mixed watchlist must split and call this once per class.
+
+        Falls back to per-symbol get_bars() calls (unbatched, but each independently
+        error-isolated) if the batched request itself fails — a network-level failure
+        would otherwise fail every symbol in the batch together, which get_bars()'s
+        existing per-symbol try/except never did.
+        """
+        if not symbols:
+            return {}
+        is_crypto = '/' in symbols[0]
+        if timeframe == '1Day':
+            lookback_days = limit * 3
+        else:
+            bars_per_day = 24 if is_crypto else 7
+            lookback_days = max(int(limit / bars_per_day * 2.5) + 5, 5)
+        start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+        symbols_param = ','.join(quote(s, safe='') for s in symbols)
+        if is_crypto:
+            base_url = (
+                f'{CRYPTO_DATA_BASE_URL}/bars'
+                f'?symbols={symbols_param}&timeframe={timeframe}&start={start}&limit=10000&sort=asc'
+            )
+        else:
+            base_url = (
+                f'{DATA_BASE_URL}/stocks/bars'
+                f'?symbols={symbols_param}&timeframe={timeframe}&start={start}&limit=10000&feed=iex&sort=asc'
+            )
+        try:
+            bars_by_symbol: Dict[str, List[Dict]] = {s: [] for s in symbols}
+            page_token = None
+            for _ in range(50):
+                page_url = base_url + (f'&page_token={quote(page_token, safe="")}' if page_token else '')
+                req = urllib.request.Request(page_url)
+                req.add_header('APCA-API-KEY-ID', self.api_key)
+                req.add_header('APCA-API-SECRET-KEY', self.secret_key)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
+                page_bars = data.get('bars') or {}
+                for symbol, bars in page_bars.items():
+                    if symbol in bars_by_symbol:
+                        bars_by_symbol[symbol].extend(bars)
+                page_token = data.get('next_page_token')
+                if not page_token:
+                    break
+
+            result = {}
+            for symbol, all_bars in bars_by_symbol.items():
+                if all_bars and self._is_bar_still_forming(all_bars[-1], is_crypto, timeframe):
+                    all_bars = all_bars[:-1]
+                result[symbol] = all_bars[-limit:]
+            return result
+        except Exception as e:
+            logger.error(f"[get_bars_multi] Batched fetch failed for {symbols}, falling back to per-symbol: {e}")
+            return {symbol: self.get_bars(symbol, timeframe=timeframe, limit=limit) for symbol in symbols}
+
     @staticmethod
     def _is_bar_still_forming(bar: Dict, is_crypto: bool = False, timeframe: str = '1Day') -> bool:
         """A bar dated today/this period isn't final until that period ends — until then

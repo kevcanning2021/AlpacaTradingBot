@@ -62,8 +62,9 @@ class OpportunityScanner:
     def __init__(self, client):
         self.client = client
 
-    def _analyze(self, symbol: str) -> Dict:
-        bars = self.client.get_bars(symbol, limit=self.SIGNAL_BAR_WINDOW)
+    def _analyze_bars(self, symbol: str, bars: List[Dict]) -> Dict:
+        """Pure signal computation from already-fetched bars -- shared by _analyze()
+        (single-symbol) and scan() (batched), so both paths can never drift apart."""
         if len(bars) < 22:
             return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history', 'price': 0.0}
 
@@ -103,11 +104,28 @@ class OpportunityScanner:
             'ema21': round(ema21[-1], 4),
         }
 
+    def _analyze(self, symbol: str) -> Dict:
+        bars = self.client.get_bars(symbol, limit=self.SIGNAL_BAR_WINDOW)
+        return self._analyze_bars(symbol, bars)
+
     def scan(self, watchlist: List[str]) -> List[Dict]:
+        """Fetches all symbols' bars in as few batched API round trips as possible
+        (one per asset class present in `watchlist`) instead of one call per symbol --
+        same signals, same per-symbol error isolation, far fewer requests. Added
+        2026-08-04; see get_bars_multi() docstring for the batching/fallback behavior."""
+        stock_symbols = [s for s in watchlist if '/' not in s]
+        crypto_symbols = [s for s in watchlist if '/' in s]
+
+        bars_by_symbol: Dict[str, List[Dict]] = {}
+        if stock_symbols:
+            bars_by_symbol.update(self.client.get_bars_multi(stock_symbols, limit=self.SIGNAL_BAR_WINDOW))
+        if crypto_symbols:
+            bars_by_symbol.update(self.client.get_bars_multi(crypto_symbols, limit=self.SIGNAL_BAR_WINDOW))
+
         results = []
         for symbol in watchlist:
             try:
-                result = self._analyze(symbol)
+                result = self._analyze_bars(symbol, bars_by_symbol.get(symbol, []))
                 logger.info(f"[SCAN] {symbol}: {result['signal'].upper()} — {result['reason']}")
                 results.append(result)
             except Exception as e:

@@ -140,9 +140,10 @@ def _simulate_trades(bars, buy_rsi_max, sell_rsi_min):
 
 
 def _backtest_watchlist(client, watchlist):
+    bars_by_symbol = client.get_bars_multi(watchlist, limit=BACKTEST_LOOKBACK_BARS)
     per_symbol = {}
     for symbol in watchlist:
-        bars = client.get_bars(symbol, limit=BACKTEST_LOOKBACK_BARS)
+        bars = bars_by_symbol.get(symbol, [])
         per_symbol[symbol] = _simulate_trades(bars, OpportunityScanner.BUY_RSI_MAX, OpportunityScanner.SELL_RSI_MIN)
 
     all_trades = [t for trades in per_symbol.values() for t in trades]
