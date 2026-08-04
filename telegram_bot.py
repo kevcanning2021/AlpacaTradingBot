@@ -35,14 +35,21 @@ OPTIMIZE_BUY_GRID = [55, 60, 65, 70]
 OPTIMIZE_SELL_GRID = [70, 75, 80, 85, 90]
 OPTIMIZE_MIN_TRAIN_TRADES = 5  # grid cells below this are too thin to trust, skipped
 
-HELP_TEXT = (
-    "AlpacaTradingBot commands (read-only, test account):\n"
-    "/status - equity, cash, buying power, open positions\n"
-    "/positions - detailed open position list\n"
-    "/history - last 10 closed trades\n"
-    "/backtest - re-run today's BUY_RSI_MAX/SELL_RSI_MIN backtest now\n"
-    "/optimize - grid-search RSI thresholds with a real train/holdout split\n"
-    "/help - this message"
+# Single source of truth for both the /help text and Telegram's native command
+# menu (set_bot_commands below) -- BOT_COMMANDS is a list of (name, description)
+# with no leading slash (Telegram's setMyCommands convention; it adds the slash
+# in its own UI). Keeping this one list avoids the menu and /help silently
+# drifting apart if a command is ever added or changed.
+BOT_COMMANDS = [
+    ("status", "equity, cash, buying power, open positions"),
+    ("positions", "detailed open position list"),
+    ("history", "last 10 closed trades"),
+    ("backtest", "re-run today's BUY_RSI_MAX/SELL_RSI_MIN backtest now"),
+    ("optimize", "grid-search RSI thresholds with a real train/holdout split"),
+    ("help", "this message"),
+]
+HELP_TEXT = "AlpacaTradingBot commands (read-only, test account):\n" + "\n".join(
+    f"/{name} - {desc}" for name, desc in BOT_COMMANDS
 )
 
 
@@ -59,6 +66,25 @@ def send_message(chat_id: str, text: str):
         logger.error(f'Telegram sendMessage failed: HTTP {e.code}: {e.read().decode(errors="replace")}')
     except Exception as e:
         logger.error(f'Telegram sendMessage failed: {e}')
+
+
+def set_bot_commands():
+    """Registers BOT_COMMANDS with Telegram's setMyCommands so they show up in the
+    bot's native "/" menu button, not just as typed text. Called once at startup --
+    idempotent (re-sending the same list is a harmless no-op), so it also
+    self-heals the menu if a command was ever added without this having run yet."""
+    url = f'{API_BASE}/setMyCommands'
+    payload = json.dumps({'commands': [{'command': name, 'description': desc} for name, desc in BOT_COMMANDS]}).encode()
+    req = urllib.request.Request(url, data=payload, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status != 200:
+                logger.error(f'setMyCommands returned HTTP {resp.status}')
+            else:
+                logger.info(f'Registered {len(BOT_COMMANDS)} commands with Telegram\'s menu')
+    except Exception as e:
+        logger.error(f'setMyCommands failed (menu may be stale, bot still works via typed commands): {e}')
 
 
 def get_updates(offset):
@@ -248,6 +274,7 @@ def main():
         logger.error('TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing. Exiting.')
         return
 
+    set_bot_commands()
     client = AlpacaClient()
     offset = None
     logger.info('Telegram command bot started, long-polling for messages...')
