@@ -49,10 +49,14 @@ def save_state(state):
 
 
 def check_services():
+    # systemctl is-active accepts multiple units and prints one status line per unit,
+    # in the given order, regardless of exit code -- one subprocess spawn instead of
+    # one per service (confirmed live: a mix of active/inactive units still lists all
+    # statuses in order).
     issues = []
-    for svc in SERVICES:
-        result = subprocess.run(['systemctl', 'is-active', svc], capture_output=True, text=True)
-        status = result.stdout.strip()
+    result = subprocess.run(['systemctl', 'is-active'] + SERVICES, capture_output=True, text=True)
+    statuses = result.stdout.splitlines()
+    for svc, status in zip(SERVICES, statuses):
         if status != 'active':
             issues.append((f'service_down:{svc}', f'{svc} is "{status}", not active'))
     return issues

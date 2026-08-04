@@ -98,14 +98,13 @@ def _simulate_trades(bars, buy_rsi_max, sell_rsi_min):
     recorded in STRATEGY.md (confirmed by reproducing the documented 65/80 result:
     not outlier-driven, +0.5%-+1.9%/trade leave-one-symbol-out).
 
-    NOT a faithful simulation of live per-check behavior: OpportunityScanner._analyze
-    actually re-fetches only the last 35 bars and recomputes EMA9/21 from scratch on
-    every single check, with no continuity between checks — a real, currently
-    unreconciled gap between how these thresholds were validated and how the bot
-    actually runs (flagged in STRATEGY.md; a same-day live comparison found the
-    35-bar-window version notably weaker and outlier-driven on identical data). Using
-    the continuous version here keeps this tool's numbers comparable to that history
-    instead of silently introducing a second, disagreeing methodology."""
+    This now closely matches live per-check behavior too: OpportunityScanner._analyze
+    fetches SIGNAL_BAR_WINDOW (90) bars and recomputes EMA9/21 from that window each
+    check — originally 35 bars, which left EMA21 undercooked and gave a measurably
+    weaker, outlier-driven result versus this continuous methodology (a real gap,
+    found and fixed 2026-07-16 by raising the window to 90, the point where the two
+    methodologies converge to identical results). See STRATEGY.md "Automated
+    monitoring" for the investigation and convergence data."""
     closes = [float(b['c']) for b in bars]
     ema9 = _compute_ema(closes, 9)
     ema21 = _compute_ema(closes, 21)
