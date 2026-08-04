@@ -72,9 +72,20 @@ def set_bot_commands():
     """Registers BOT_COMMANDS with Telegram's setMyCommands so they show up in the
     bot's native "/" menu button, not just as typed text. Called once at startup --
     idempotent (re-sending the same list is a harmless no-op), so it also
-    self-heals the menu if a command was ever added without this having run yet."""
+    self-heals the menu if a command was ever added without this having run yet.
+
+    Explicitly scoped to "all_private_chats" (this bot only ever runs in a private
+    chat), not left at Telegram's "default" scope -- scope precedence is
+    chat-specific > all_private_chats > default, so a stale all_private_chats
+    override (found 2026-08-04: a leftover single "hi" command from manual
+    BotFather testing before this file existed) silently wins over a default-scope
+    registration and hides it. Setting commands directly at all_private_chats
+    overwrites that stale entry instead of being shadowed by it."""
     url = f'{API_BASE}/setMyCommands'
-    payload = json.dumps({'commands': [{'command': name, 'description': desc} for name, desc in BOT_COMMANDS]}).encode()
+    payload = json.dumps({
+        'commands': [{'command': name, 'description': desc} for name, desc in BOT_COMMANDS],
+        'scope': {'type': 'all_private_chats'},
+    }).encode()
     req = urllib.request.Request(url, data=payload, method='POST')
     req.add_header('Content-Type', 'application/json')
     try:
@@ -82,7 +93,7 @@ def set_bot_commands():
             if resp.status != 200:
                 logger.error(f'setMyCommands returned HTTP {resp.status}')
             else:
-                logger.info(f'Registered {len(BOT_COMMANDS)} commands with Telegram\'s menu')
+                logger.info(f'Registered {len(BOT_COMMANDS)} commands with Telegram\'s menu (scope=all_private_chats)')
     except Exception as e:
         logger.error(f'setMyCommands failed (menu may be stale, bot still works via typed commands): {e}')
 
