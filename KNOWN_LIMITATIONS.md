@@ -20,7 +20,10 @@ A third service, `alpaca-dashboard.service`, is a read-only monitoring PWA
 
 A separate order-less TypeScript bot (`crypto-paper-bot/`) also runs on
 the VPS via root crontab (not systemd) — analysis-only, no broker
-integration, reuses the same WhatsApp/CallMeBot env vars.
+integration. Its optional WhatsApp/CallMeBot alerting is disabled
+(`WHATSAPP_ENABLED=false`, set 2026-08-04 alongside the main bot's
+WhatsApp→Telegram switch) — it was the actual source of "analysis" chat
+messages Kevin didn't want, not the main Python bot.
 
 ## `strategy_check.py` — hourly VPS cron, not the Strategy Review routine
 
