@@ -19,12 +19,18 @@ thresholds) with the same cooldown/state pattern as watchdog.py:
 - Once/day, after market close: re-backtest BUY_RSI_MAX/SELL_RSI_MIN
   (read live from scanner.py, so this never drifts from what's actually
   deployed) against a fresh 300-bar window per symbol, using the same
-  continuous-EMA methodology as every backtest in STRATEGY.md (see
-  _simulate_trades below for why this deliberately does NOT replicate the
-  live scanner's actual per-check windowing — a real, separately-flagged
-  gap). Flags if aggregate expectancy has gone negative, if it's become
-  outlier-driven (a leave-one-symbol-out flips sign — see project Lesson
-  #10), or if it's dropped more than half since the last recorded run.
+  continuous-EMA methodology as every backtest in STRATEGY.md. Flags if
+  aggregate expectancy has gone negative, if it's become outlier-driven
+  (a leave-one-symbol-out flips sign — see project Lesson #10), or if
+  it's dropped more than half since the last recorded run.
+- Same daily run, once >= FORWARD_TEST_MIN_TRADES real closed trades
+  exist (trader.py persists every closed trade's realized P&L to
+  trade_history.json — see its _record_trade_outcome): compares the
+  live/forward-test win rate and expectancy against this same backtest.
+  Flags if the real results are negative, or less than half the
+  backtest's predicted expectancy — the actual "does live match what we
+  backtested" check the project's goal (STRATEGY.md) has been waiting on
+  since before real trades existed to compare against.
 """
 import json
 import os
@@ -36,10 +42,37 @@ from whatsapp_notifier import WhatsAppNotifier
 from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_check_state.json')
+TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
 HEALTH_ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 BACKTEST_ALERT_COOLDOWN_SECONDS = 24 * 60 * 60
 BACKTEST_LOOKBACK_BARS = 300
 STUCK_SELL_THRESHOLD = 2  # consecutive hourly checks with an unclosed SELL signal
+FORWARD_TEST_MIN_TRADES = 10  # below this, real trade count is too thin to compare against the backtest at all
+
+
+def load_trade_history():
+    if os.path.exists(TRADE_HISTORY_FILE):
+        try:
+            with open(TRADE_HISTORY_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def _forward_test_stats(trade_history, asset_class):
+    """Realized win rate/expectancy from trader.py's persisted trade_history.json
+    (real closed trades only), split by asset class to match how the backtest is
+    split. Returns trade_count always (so progress toward FORWARD_TEST_MIN_TRADES is
+    visible even before there's enough to compare), plus expectancy/win_rate once
+    the threshold is met."""
+    trades = [t for t in trade_history if t.get('asset_class') == asset_class and t.get('pnl_pct') is not None]
+    stats = {'trade_count': len(trades), 'ready': len(trades) >= FORWARD_TEST_MIN_TRADES}
+    if stats['ready']:
+        pcts = [t['pnl_pct'] for t in trades]
+        stats['expectancy_pct'] = (sum(pcts) / len(pcts)) * 100
+        stats['win_rate_pct'] = (sum(1 for p in pcts if p > 0) / len(pcts)) * 100
+    return stats
 
 
 def load_state():
@@ -169,8 +202,12 @@ def run_daily_backtests(client, state):
     issues = []
     history = state.setdefault('backtest_history', [])
     today = datetime.now(timezone.utc).date().isoformat()
+    trade_history = load_trade_history()
 
-    for label, watchlist in (('stock', settings.WATCHLIST), ('crypto', settings.CRYPTO_WATCHLIST)):
+    for label, watchlist, asset_class in (
+        ('stock', settings.WATCHLIST, 'us_equity'),
+        ('crypto', settings.CRYPTO_WATCHLIST, 'crypto'),
+    ):
         if not watchlist:
             continue
         result = _backtest_watchlist(client, watchlist)
@@ -202,6 +239,27 @@ def run_daily_backtests(client, state):
                 f'{label} backtest expectancy dropped from {prior["expectancy_pct"]:.3f}%/trade '
                 f'({prior["date"]}) to {result["expectancy_pct"]:.3f}%/trade — more than 50% weaker'
             ))
+
+        # Forward test: compare real closed-trade results against this same backtest,
+        # once there's enough real trades to mean anything (per-project convention,
+        # see STRATEGY.md -- fewer than ~10 closed trades is noise, not signal).
+        forward = _forward_test_stats(trade_history, asset_class)
+        result['forward_test'] = forward
+        if forward['ready']:
+            if forward['expectancy_pct'] <= 0:
+                issues.append((
+                    f'forward_test_negative:{label}',
+                    f'{label} LIVE forward-test expectancy is negative: {forward["expectancy_pct"]:+.3f}%/trade '
+                    f'over {forward["trade_count"]} real closed trades (backtest predicts '
+                    f'{result["expectancy_pct"]:+.3f}%/trade) — worth a closer look'
+                ))
+            elif aggregate_positive and forward['expectancy_pct'] < result['expectancy_pct'] * 0.5:
+                issues.append((
+                    f'forward_test_diverged:{label}',
+                    f'{label} LIVE forward-test expectancy ({forward["expectancy_pct"]:+.3f}%/trade, '
+                    f'{forward["trade_count"]} real trades) is less than half the backtest prediction '
+                    f'({result["expectancy_pct"]:+.3f}%/trade) — may be worth revisiting thresholds'
+                ))
 
         history.append(result)
 

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'peak_prices_state.json')
 REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reentry_state.json')
+TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
 
 
 def _now() -> str:
@@ -41,7 +42,7 @@ class TradingManager:
         self.notifier = WhatsAppNotifier()
         self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
-        self.trade_history = []          # Track all trades for P&L analysis
+        self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
         self.loss_streak = 0             # Current losing streak
@@ -84,6 +85,26 @@ class TradingManager:
                 json.dump(list(self.reentry_fired), f)
         except OSError as e:
             logger.error(f"Failed to save re-entry state: {e}")
+
+    def _load_trade_history(self) -> list:
+        """Persisted so realized P&L survives a restart -- strategy_check.py (a
+        separate process) reads this to compare live forward-test results against
+        the backtest once enough closed trades exist, which needs the full history,
+        not just whatever's accumulated since the last restart."""
+        if os.path.exists(TRADE_HISTORY_FILE):
+            try:
+                with open(TRADE_HISTORY_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load trade history, starting fresh: {e}")
+        return []
+
+    def _save_trade_history(self):
+        try:
+            with open(TRADE_HISTORY_FILE, 'w') as f:
+                json.dump(self.trade_history, f)
+        except OSError as e:
+            logger.error(f"Failed to save trade history: {e}")
 
     def check_positions(self, asset_class: Optional[str] = None) -> Dict:
         """Check all open positions and apply trading logic.
@@ -190,7 +211,7 @@ class TradingManager:
                 closed = False
                 try:
                     self.client.close_position(symbol)
-                    self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
+                    self._record_trade_outcome(symbol, position)
                     self.position_peak_prices.pop(symbol, None)
                     self._save_peak_prices()
                     if symbol in self.reentry_fired:
@@ -250,7 +271,7 @@ class TradingManager:
 
             try:
                 self.client.close_position(symbol)
-                self._record_trade_outcome(symbol, float(position.get('unrealized_pl', 0)))
+                self._record_trade_outcome(symbol, position)
                 self.position_peak_prices.pop(symbol, None)
                 self._save_peak_prices()
                 if symbol in self.reentry_fired:
@@ -497,21 +518,39 @@ class TradingManager:
             logger.error(f"Error adjusting strategy: {e}")
             return {'error': str(e)}
     
-    def _record_trade_outcome(self, symbol: str, pnl: float):
-        """Update win/loss streak from a single closed trade's realized P&L.
+    def _record_trade_outcome(self, symbol: str, position: Dict):
+        """Update win/loss streak from a single closed trade's realized P&L, and
+        persist it to TRADE_HISTORY_FILE for forward-test tracking (strategy_check.py
+        compares this against the backtest once enough closed trades exist).
 
         Streaks are driven by actual closed trades, not by the concurrent
         unrealized P&L direction of whatever happens to be open — two
         correlated positions dipping together for a few hourly checks isn't
         a losing streak, it's one market move.
+
+        Takes the closing position dict (not separate pnl/pct params) so pnl_pct
+        (Alpaca's unrealized_plpc, captured right before the close -- comparable to
+        the backtest's percentage-based expectancy, unlike dollar pnl which scales
+        with position size) and asset_class (to split stock vs. crypto forward-test
+        stats the same way the backtest already does) come from one place, not three
+        separately-maintained call sites.
         """
+        pnl = float(position.get('unrealized_pl', 0))
+        pnl_pct = float(position.get('unrealized_plpc', 0))
         if pnl > 0:
             self.win_streak += 1
             self.loss_streak = 0
         elif pnl < 0:
             self.loss_streak += 1
             self.win_streak = 0
-        self.trade_history.append({'symbol': symbol, 'pnl': pnl, 'timestamp': _now()})
+        self.trade_history.append({
+            'symbol': symbol,
+            'pnl': pnl,
+            'pnl_pct': pnl_pct,
+            'asset_class': position.get('asset_class'),
+            'timestamp': _now(),
+        })
+        self._save_trade_history()
 
     def analyze_performance(self) -> Dict:
         """Snapshot of current unrealized P&L plus the closed-trade win/loss streak"""
@@ -613,7 +652,7 @@ class TradingManager:
                     executed.append({'side': 'sell', 'symbol': symbol, 'reason': sig['reason']})
                     logger.info(f"[SCANNER] SELL {symbol} — {sig['reason']}")
                     if position is not None:
-                        self._record_trade_outcome(pos_symbol, float(position.get('unrealized_pl', 0)))
+                        self._record_trade_outcome(pos_symbol, position)
                     self.position_peak_prices.pop(pos_symbol, None)
                     self._save_peak_prices()
                     if pos_symbol in self.reentry_fired:
