@@ -32,7 +32,11 @@ Per open position, in order, each check (`trader.py: check_positions`):
    buy, same notional sizing as a fresh entry) if price has pulled back
    from peak by the re-entry threshold **and** RSI has dropped back below
    `BUY_RSI_MAX` (added 2026-07-14 — a pullback alone doesn't confirm
-   momentum has turned). Fires at most once per pullback episode.
+   momentum has turned) **and** the position has been open at least
+   `MIN_REENTRY_AGE_HOURS` (added 2026-08-06 — a fresh position's peak is
+   just its entry price, so an ordinary intraday dip minutes after a fill
+   looked identical to a real pullback). Fires at most once per pullback
+   episode.
 
 Stock and crypto run the identical logic with separate, wider crypto
 thresholds (crypto's ordinary volatility is much higher than stocks').
@@ -50,6 +54,7 @@ touch each other's positions.
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
 | Re-entry | 5% / 12.5% | `config/settings.py` | 2026-07-14 |
+| Re-entry min age | 4h / 4h | `config/settings.py` | 2026-08-06 |
 
 **`SELL_RSI_MIN` history**: started at 75, raised to 85 on 2026-07-09
 (backtested against a ~90-day window — RSI was found to routinely sit >75
@@ -101,6 +106,23 @@ stop always closed the position at the same pullback level before
 re-entry could ever fire, making it dead code. 12.5% preserves the same
 ratio as the stock config (5%/8% = 0.625, applied to crypto's 20%) rather
 than a new guess.
+
+**Re-entry minimum age (4h, both stock and crypto)**: added after a real
+reentry fired on GOOGL (test account) ~2.5h after its original scan-buy,
+same trading session — `position_peak_prices[symbol]` is set to
+`current_price` on the very first check after entry, so an ordinary
+intraday dip right after a fresh fill looked identical to a real pullback
+from an established peak. Backtested the gate itself against 300 real
+daily bars across both watchlists (full walk-forward simulation: entry,
+stop-loss, trailing-stop, reentry blended into average cost, scanner exit
+— not just raw signals): every historical reentry in that window fired 7+
+trading days after its entry (soonest: NVDA at 7 days), so a gate anywhere
+from a few hours to several days costs zero backtested expectancy — picked
+4h as comfortably clear of the observed 2.5h failure while staying well
+below the shortest real legitimate gap seen. Not asset-class-split like
+the thresholds above — this isn't about volatility magnitude, it's about
+whether the tracked peak is old enough to be meaningful, which applies the
+same way to crypto and stocks.
 
 ## Rejected hypotheses — don't re-propose without new evidence
 

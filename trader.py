@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 import pytz
 from alpaca_client import AlpacaClient, position_symbol
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'peak_prices_state.json')
 REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reentry_state.json')
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
 
 
 def _now() -> str:
@@ -41,6 +42,7 @@ class TradingManager:
         self.client = AlpacaClient()
         self.notifier = TelegramNotifier()
         self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
+        self.position_opened_at = self._load_position_opened_at()  # When each open position was first observed
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
         self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
         self.strategy_adjustments = []   # Track strategy changes
@@ -66,6 +68,26 @@ class TradingManager:
                 json.dump(self.position_peak_prices, f)
         except OSError as e:
             logger.error(f"Failed to save peak prices state: {e}")
+
+    def _load_position_opened_at(self) -> Dict:
+        """Load persisted position-open timestamps so the reentry min-age gate
+        (see _handle_reentry) survives a service restart -- otherwise a restart
+        would lose track of how long a position has actually been held, same
+        restart-safety reasoning as peak prices above."""
+        if os.path.exists(POSITION_OPENED_FILE):
+            try:
+                with open(POSITION_OPENED_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load position-opened state, starting fresh: {e}")
+        return {}
+
+    def _save_position_opened_at(self):
+        try:
+            with open(POSITION_OPENED_FILE, 'w') as f:
+                json.dump(self.position_opened_at, f)
+        except OSError as e:
+            logger.error(f"Failed to save position-opened state: {e}")
 
     def _load_reentry_state(self) -> list:
         """Which symbols have already re-entered since their current peak was set —
@@ -143,6 +165,15 @@ class TradingManager:
                 # Calculate gain/loss percentage
                 pnl_pct = (current_price - avg_entry_price) / avg_entry_price if avg_entry_price > 0 else 0
                 
+                # First time this symbol has been observed open (a fresh position, or an
+                # already-open one from before this tracking existed) -- record it as the
+                # age reference for the reentry min-age gate below. For a position that
+                # predates this feature, this conservatively resets its "age" to now rather
+                # than leaving it permanently un-reentry-able with no recorded open time.
+                if symbol not in self.position_opened_at:
+                    self.position_opened_at[symbol] = datetime.now(timezone.utc).isoformat()
+                    self._save_position_opened_at()
+
                 # Update peak price tracking
                 if symbol not in self.position_peak_prices:
                     self.position_peak_prices[symbol] = current_price
@@ -214,6 +245,8 @@ class TradingManager:
                     self._record_trade_outcome(symbol, position)
                     self.position_peak_prices.pop(symbol, None)
                     self._save_peak_prices()
+                    self.position_opened_at.pop(symbol, None)
+                    self._save_position_opened_at()
                     if symbol in self.reentry_fired:
                         self.reentry_fired.discard(symbol)
                         self._save_reentry_state()
@@ -274,6 +307,8 @@ class TradingManager:
                 self._record_trade_outcome(symbol, position)
                 self.position_peak_prices.pop(symbol, None)
                 self._save_peak_prices()
+                self.position_opened_at.pop(symbol, None)
+                self._save_position_opened_at()
                 if symbol in self.reentry_fired:
                     self.reentry_fired.discard(symbol)
                     self._save_reentry_state()
@@ -322,6 +357,16 @@ class TradingManager:
         doesn't confirm momentum has turned, added 2026-07-14 after review flagged that
         the original version would average into a position on price distance alone with
         no reference to RSI/EMA state at all.
+
+        Also requires the position to be at least MIN_REENTRY_AGE_HOURS old (added
+        2026-08-06 after GOOGL fired a real reentry ~2.5h after its original scan-buy,
+        same trading session). position_peak_prices[symbol] is set to current_price on
+        the very first check after entry, so without this gate an ordinary intraday dip
+        right after a fresh fill looks identical to a real pullback from an established
+        peak. Backtested against 300 real daily bars (stock + crypto watchlists): every
+        historical reentry in that window fired 7+ trading days after its entry, so a
+        several-hour (or even several-day) minimum age costs zero backtested expectancy
+        while directly blocking the observed same-session failure — see STRATEGY.md.
         """
         try:
             threshold = settings.CRYPTO_REENTRY_THRESHOLD if position.get('asset_class') == 'crypto' else settings.REENTRY_THRESHOLD
@@ -332,6 +377,25 @@ class TradingManager:
                 return buying_power
             pullback_pct = (peak_price - current_price) / peak_price
             if pullback_pct < threshold or symbol in self.reentry_fired:
+                return buying_power
+
+            opened_at = self.position_opened_at.get(symbol)
+            age_hours = (
+                (datetime.now(timezone.utc) - datetime.fromisoformat(opened_at)).total_seconds() / 3600
+                if opened_at else None
+            )
+            if age_hours is None or age_hours < settings.MIN_REENTRY_AGE_HOURS:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': (
+                        f'Pulled back {round(pullback_pct * 100, 2)}% from peak but the position is only '
+                        f'{"an unknown age (no opened_at recorded)" if age_hours is None else f"{age_hours:.1f}h old"} '
+                        f'(needs {settings.MIN_REENTRY_AGE_HOURS}h) — peak this fresh isn\'t trustworthy yet. No buy placed.'
+                    )
+                })
+                logger.info(f"[{symbol}] Re-entry threshold hit but position too young ({age_hours} h) — skipping")
                 return buying_power
 
             is_crypto = position.get('asset_class') == 'crypto'
@@ -655,6 +719,8 @@ class TradingManager:
                         self._record_trade_outcome(pos_symbol, position)
                     self.position_peak_prices.pop(pos_symbol, None)
                     self._save_peak_prices()
+                    self.position_opened_at.pop(pos_symbol, None)
+                    self._save_position_opened_at()
                     if pos_symbol in self.reentry_fired:
                         self.reentry_fired.discard(pos_symbol)
                         self._save_reentry_state()

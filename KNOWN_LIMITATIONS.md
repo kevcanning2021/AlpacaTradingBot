@@ -72,14 +72,21 @@ worth avoiding overlap with market hours if doing a lot of local pulls).
 
 ## State that matters: peak prices, re-entry, and streaks
 
-- `position_peak_prices` (trailing stop, re-entry pullback calculation)
-  and `reentry_fired` (re-entry once-per-episode gating) are **persisted
-  to disk** (`peak_prices_state.json`, `reentry_state.json`, gitignored) —
-  survive a service restart. Added 2026-07-14 after confirming restarts
-  had become frequent enough (multiple deploys per day) that the old
-  "the process rarely restarts" assumption no longer held, and a restart
-  was silently re-seeding every peak to the current price, discarding
-  whatever gain the trailing stop was supposed to be protecting.
+- `position_peak_prices` (trailing stop, re-entry pullback calculation),
+  `reentry_fired` (re-entry once-per-episode gating), and (added
+  2026-08-06) `position_opened_at` (re-entry minimum-age gating) are
+  **persisted to disk** (`peak_prices_state.json`, `reentry_state.json`,
+  `position_opened_state.json`, all gitignored) — survive a service
+  restart. Peak prices/reentry-fired added 2026-07-14 after confirming
+  restarts had become frequent enough (multiple deploys per day) that the
+  old "the process rarely restarts" assumption no longer held, and a
+  restart was silently re-seeding every peak to the current price,
+  discarding whatever gain the trailing stop was supposed to be
+  protecting. `position_opened_at` is seeded to "now" the first time a
+  symbol is observed with no recorded open time — for a position that
+  predates this feature (or after any state-file loss), this
+  conservatively treats it as freshly opened rather than leaving it
+  permanently blocked from ever re-entering.
 - `win_streak`/`loss_streak` (`trader.py: _record_trade_outcome`) are
   **still in-memory only**, not persisted — a restart resets the streak
   count to 0. No longer drives any live behavior or notification as of

@@ -20,6 +20,19 @@ MARKET_CLOSE_MINUTE = 0
 CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
 STOP_LOSS_THRESHOLD = 0.05  # Adjust stops when position moves 5%
 REENTRY_THRESHOLD = 0.05    # Re-enter when pullback is 5%
+# Minimum time a position must have been open before a reentry can fire (both stock and
+# crypto -- unlike the stop-loss/trailing-stop/reentry-threshold splits above, this isn't
+# about volatility magnitude by asset class, it's about whether the tracked peak is old
+# enough to mean anything, which applies the same way to both). Added 2026-08-06 after a
+# real reentry fired on GOOGL ~2.5h after its original scan-buy, same trading session --
+# position_peak_prices[symbol] is set to current_price on the very first check after
+# entry, so an ordinary intraday dip right after a fresh fill looked identical to a real
+# pullback from an established peak. Backtested against 300 real daily bars across both
+# watchlists: every historical reentry in that window fired 7+ trading days after its
+# entry (soonest: NVDA at 7 days), so this gate costs zero backtested expectancy at any
+# value from a few hours up to several days -- 4h picked as comfortably clear of the
+# observed 2.5h failure while still well below the shortest real legitimate gap seen.
+MIN_REENTRY_AGE_HOURS = float(os.getenv('MIN_REENTRY_AGE_HOURS', '4'))
 # Separate from STOP_LOSS_THRESHOLD: a flat 5% pullback-from-peak triggered too often on
 # normal volatility in an intact uptrend (backtested watchlist, 90 daily bars, 2026-07-10 —
 # NVDA alone false-tripped 4x while EMA9>EMA21 and RSI<85), undercutting the RSI-85 change's
