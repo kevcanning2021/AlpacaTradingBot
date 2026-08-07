@@ -95,3 +95,13 @@ gets them, not just whoever's driving a particular session.
     checking that one choice against holdout exactly once, gave the honest
     (worse) answer. Lesson 13's out-of-sample discipline applies to informal
     side-by-side comparisons too, not just formal systematic searches.
+
+18. **A long-lived service's entry point must guard all side-effecting code
+    behind `if __name__ == '__main__':`, not just wrap it in a function.**
+    `run_server.py` called `scheduler.start()` at module level — a plain
+    `import run_server` (e.g. from a verification/test script, not even
+    running it) silently started a real scheduler against whatever `.env`
+    was active, with no way to tell from the import alone that it had
+    happened. Caught and killed before any interval elapsed, but the module
+    boundary between "safe to import" and "starts doing things" needs to be
+    the `__main__` guard, every time, for anything that runs as a service.
