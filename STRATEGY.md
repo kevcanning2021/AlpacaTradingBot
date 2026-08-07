@@ -197,6 +197,53 @@ watchlist, using the exact live scanner logic:
   correlation/sector diversification analysis instead of pure backtest
   performance).
 
+Tested 2026-08-07 against 600 real daily bars (proper 300/300 train/holdout
+split, full walk-forward simulation including stop-loss/trailing-stop, not
+just raw scanner signals), specifically looking for a higher-expectancy
+variant before considering real money:
+
+- **Trend/regime filter** (only buy when price is above its own 50-day or
+  100-day SMA). Worse on both train and holdout (+0.27% to +0.39%/trade vs.
+  baseline's +1.955%/trade holdout), and outlier-driven — sign flips
+  excluding AMZN (50-day) or AAPL+AMZN (100-day). A trend filter cuts into
+  exactly the pullback-then-recovery entries this strategy already profits
+  from; it doesn't add a real edge here.
+- **Volume confirmation on entry** (require entry-day volume > 1.2x or 1.5x
+  the 20-day average). Looked spectacular on holdout (+3.3% to +9.2%/trade,
+  one variant 100% win rate) but on only 3-8 total trades across the whole
+  window — the exact thin-sample/outlier pattern flagged repeatedly
+  elsewhere on this page (1.2x flips negative excluding AAPL alone). Reject
+  as unvalidatable at this trade frequency, not "worse," just untestable.
+- **Partial profit-taking** (sell 50% of the position at +8% or +15% gain,
+  let the rest ride under the normal stop/trail rules). Dollar-weighted
+  return was worse than baseline at both triggers (+1.80% and +1.88%/trade
+  vs. baseline's +1.955%). This directly contradicts the "let winners run"
+  thesis `SELL_RSI_MIN=80` was tuned for on 2026-07-16 — taking profit early
+  is exactly what would have clipped the real MSFT trade (+23.9%) short.
+- **ATR-based (volatility-adaptive) stop-loss/trailing-stop**, replacing the
+  fixed 5%/8% with a multiple of each symbol's own 14-day ATR. **Initially
+  looked like a real win** (+2.36%/trade on holdout at a 2x/3x multiplier)
+  — but that number came from eyeballing several multipliers against
+  holdout data, the same shopping-around the systematic-screen mistake
+  below already warns about. Re-run properly (grid-search the multiplier on
+  **training data only**, then check that one selected value against
+  holdout, never touched during selection): the train-optimal multiplier
+  (1.5x stop / 2.25x trail) scores **+1.76%/trade on holdout — slightly
+  worse than baseline's +1.955%**, not better. The earlier "win" doesn't
+  survive proper selection discipline. **Not implemented.**
+  **Methodological note**: this is the same failure mode as the systematic
+  watchlist screen below, just at a smaller scale (one parameter instead of
+  59 candidates) — testing multiple variants and reporting whichever one
+  looks best on holdout is itself a form of overfitting, even when each
+  individual variant's train/holdout split is done correctly. Any future
+  parameter sweep must select on train only and touch holdout exactly once,
+  for the one selected candidate.
+- **Conclusion**: none of the four ideas above beat the current baseline
+  (65/80 RSI, fixed 5%/8% stops) once properly tested. The current strategy
+  already captures most of the readily-available edge in this simple
+  EMA9/21+RSI framework — see "Open items" below for untried, larger-scope
+  directions (position sizing, different indicators) if this is revisited.
+
 ## Automated monitoring: `strategy_check.py`
 
 A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
@@ -285,6 +332,16 @@ by this gap.
   jobs** (separate timers, each fetches its own fresh `get_account()`) —
   narrow remaining race if both fire in the same window; fails safe via
   Alpaca's own order validation (rejected order, not overdraft).
+- **Untried, larger-scope profitability directions** (2026-08-07): the four
+  hypotheses tested above (trend filter, volume filter, partial
+  profit-taking, ATR stops) were all same-scale tweaks to the existing
+  entry/exit rules and none beat baseline. Genuinely untried: portfolio-level
+  position sizing (e.g. volatility- or Kelly-adjusted sizing rather than
+  flat `POSITION_SIZE_USD` per symbol — a capital-allocation change, not a
+  signal-quality one, so it wouldn't show up in a %/trade backtest the way
+  tested above) and different indicators entirely (MACD, Bollinger Bands)
+  rather than filters layered on the existing EMA9/21+RSI core. Both are
+  real time investments, not quick follow-ups — not started.
 
 ## How to backtest a change
 
