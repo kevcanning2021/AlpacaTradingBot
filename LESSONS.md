@@ -77,3 +77,21 @@ gets them, not just whoever's driving a particular session.
     exact same API calls it's meant to be watching.** An unhandled exception
     fetching positions/orders used to crash the watchdog before it could
     report anything at all — one bad API call took out its own alerting.
+
+16. **Any peak/trough-tracking state needs a minimum-age guard, not just an
+    economic threshold, if the state resets on a fresh episode.** A
+    pullback-triggered re-buy fired ~2.5h after its own original entry
+    because the tracked "peak" was seeded to the entry price on the very
+    first check — an ordinary intraday dip right after a fill looked
+    identical to a real pullback from an established high. The fix isn't a
+    tighter/wider threshold, it's asking "how long has this state actually
+    existed" before trusting it.
+
+17. **Testing several candidate variants and reporting whichever one looks
+    best on holdout is itself overfitting — even if each variant's own
+    train/holdout split was done correctly.** Comparing 8 ATR-stop
+    multipliers and picking the one with the best holdout number produced a
+    false "win"; re-selecting the multiplier from training data only, then
+    checking that one choice against holdout exactly once, gave the honest
+    (worse) answer. Lesson 13's out-of-sample discipline applies to informal
+    side-by-side comparisons too, not just formal systematic searches.
