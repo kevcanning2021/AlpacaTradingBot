@@ -14,19 +14,23 @@ from scheduler import get_scheduler
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-scheduler = get_scheduler()
+
+def main():
+    scheduler = get_scheduler()
+
+    def shutdown(signum, frame):
+        logger.info("Shutdown signal received, stopping scheduler...")
+        scheduler.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    scheduler.start()
+
+    while True:
+        time.sleep(60)
 
 
-def shutdown(signum, frame):
-    logger.info("Shutdown signal received, stopping scheduler...")
-    scheduler.stop()
-    sys.exit(0)
-
-
-signal.signal(signal.SIGTERM, shutdown)
-signal.signal(signal.SIGINT, shutdown)
-
-scheduler.start()
-
-while True:
-    time.sleep(60)
+if __name__ == '__main__':
+    main()

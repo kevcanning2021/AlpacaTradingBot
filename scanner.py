@@ -63,8 +63,8 @@ class OpportunityScanner:
         self.client = client
 
     def _analyze_bars(self, symbol: str, bars: List[Dict]) -> Dict:
-        """Pure signal computation from already-fetched bars -- shared by _analyze()
-        (single-symbol) and scan() (batched), so both paths can never drift apart."""
+        """Pure signal computation from already-fetched bars, kept separate from the
+        batched fetch in scan() so signal logic and I/O don't get tangled together."""
         if len(bars) < 22:
             return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history', 'price': 0.0}
 
@@ -103,10 +103,6 @@ class OpportunityScanner:
             'ema9': round(ema9[-1], 4),
             'ema21': round(ema21[-1], 4),
         }
-
-    def _analyze(self, symbol: str) -> Dict:
-        bars = self.client.get_bars(symbol, limit=self.SIGNAL_BAR_WINDOW)
-        return self._analyze_bars(symbol, bars)
 
     def scan(self, watchlist: List[str]) -> List[Dict]:
         """Fetches all symbols' bars in as few batched API round trips as possible

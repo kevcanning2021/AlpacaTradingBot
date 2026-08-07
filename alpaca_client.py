@@ -122,11 +122,6 @@ class AlpacaClient:
         else:
             raise Exception(f"Failed to get orders: {status_code} - {body}")
     
-    def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order"""
-        status, body = self._request('DELETE', f'/orders/{order_id}')
-        return status == 204
-
     def get_bars(self, symbol: str, timeframe: str = '1Day', limit: int = 35) -> List[Dict]:
         """Fetch the most recent `limit` OHLCV bars from the Alpaca data API.
 
