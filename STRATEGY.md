@@ -244,6 +244,28 @@ variant before considering real money:
   EMA9/21+RSI framework — see "Open items" below for untried, larger-scope
   directions (position sizing, different indicators) if this is revisited.
 
+**Volatility-adjusted position sizing**, tested 2026-08-11 against the same
+600-bar/300-300 train-holdout window, comparing dollar-weighted total return
+(the right metric here — sizing doesn't change which trades happen, only how
+much capital each gets, so %/trade is the wrong yardstick). Flat $10/position
+baseline: **+1.682%** holdout dollar-weighted return. Sizing positions
+inversely to each symbol's own 14-day ATR (targeting equal $ risk instead of
+equal $ notional per trade) scored **worse at every target-volatility tested**
+(1.5%/2%/2.5%/3%, clipped 0.5x-2x of base): +1.249%, +1.309%, +1.320%,
++1.433% respectively. Not outlier-driven — leave-one-out stayed positive for
+every excluded symbol at every setting. **Root cause, not just a number**:
+on this specific watchlist, NVDA is both the highest-volatility name *and*
+the best performer (+2.60% in baseline leave-one-out, the top of the list).
+Volatility-adjusted sizing systematically shrinks NVDA's position (high vol
+→ smaller size) while growing SPY/QQQ's (low vol, index-like → bigger size)
+— but SPY/QQQ are the weaker performers here. Risk-parity-style sizing
+assumes volatility and edge are independent; on this watchlist they're
+positively correlated, so de-weighting by volatility fights the actual edge
+instead of protecting it. **Not implemented.** Would need re-testing if the
+watchlist ever changes (a future screen might land on symbols where this
+correlation doesn't hold), not a permanently-closed question the way the
+07-16/07-23 watchlist-widening attempts are.
+
 ## Automated monitoring: `strategy_check.py`
 
 A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
@@ -332,16 +354,19 @@ by this gap.
   jobs** (separate timers, each fetches its own fresh `get_account()`) —
   narrow remaining race if both fire in the same window; fails safe via
   Alpaca's own order validation (rejected order, not overdraft).
-- **Untried, larger-scope profitability directions** (2026-08-07): the four
-  hypotheses tested above (trend filter, volume filter, partial
-  profit-taking, ATR stops) were all same-scale tweaks to the existing
-  entry/exit rules and none beat baseline. Genuinely untried: portfolio-level
-  position sizing (e.g. volatility- or Kelly-adjusted sizing rather than
-  flat `POSITION_SIZE_USD` per symbol — a capital-allocation change, not a
-  signal-quality one, so it wouldn't show up in a %/trade backtest the way
-  tested above) and different indicators entirely (MACD, Bollinger Bands)
-  rather than filters layered on the existing EMA9/21+RSI core. Both are
-  real time investments, not quick follow-ups — not started.
+- **Untried, larger-scope profitability directions** (2026-08-07, updated
+  2026-08-11): the four hypotheses tested 08-07 (trend filter, volume
+  filter, partial profit-taking, ATR stops) plus volatility-adjusted
+  position sizing (tested 08-11, see above — rejected, watchlist-specific
+  vol/edge correlation) were all same-scale tweaks and none beat baseline.
+  Still genuinely untried: Kelly-criterion sizing specifically (distinct
+  from volatility-adjusted — sizes off estimated win-rate/payoff ratio
+  rather than volatility, so wouldn't share the same failure mode, but
+  needs a stable win-rate estimate this account's ~31-trade backtest
+  sample may be too thin to trust) and different indicators entirely
+  (MACD, Bollinger Bands) rather than filters layered on the existing
+  EMA9/21+RSI core. Both are real time investments, not quick follow-ups
+  — not started.
 
 ## How to backtest a change
 
