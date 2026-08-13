@@ -105,3 +105,25 @@ gets them, not just whoever's driving a particular session.
     happened. Caught and killed before any interval elapsed, but the module
     boundary between "safe to import" and "starts doing things" needs to be
     the `__main__` guard, every time, for anything that runs as a service.
+
+19. **A threshold computed relative to one reference price is not the same
+    number as a same-looking % against a different reference — don't infer
+    one from the other.** `REENTRY_THRESHOLD` is pullback-from-*peak*, but a
+    position's displayed unrealized P&L is relative to *entry* — these
+    diverged by several percentage points on a real position (P&L -3%,
+    pullback-from-peak +6.5%), producing a factually wrong "hasn't hit the
+    threshold" statement from reasoning off the wrong number. When a
+    threshold has a specific reference price, state which one explicitly
+    rather than assuming the closest-looking displayed percentage is it.
+
+20. **A "fires once per episode" flag can stay latched from before a new
+    gate condition existed, silently blocking that gate from ever being
+    observed — and this looks identical to "the gate just hasn't been
+    tested yet."** A minimum-age gate was added to `_handle_reentry`, but
+    the one position whose pullback looked closest to re-testing it had
+    already fired its one re-entry *before* the gate existed — its flag
+    never got a chance to interact with the new age check at all, and
+    won't until a new peak resets it. Current price/pullback data alone
+    can't distinguish "about to test the new logic" from "structurally
+    can't reach it yet" — check the actual gating state, not just the
+    metric the gate nominally responds to.

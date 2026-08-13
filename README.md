@@ -7,8 +7,8 @@ A Python-based trading bot that monitors your positions during market hours, aut
 - **Market Hours Monitoring**: Runs only during market hours (9:30 AM - 4:00 PM ET, Mon-Fri)
 - **Periodic Checks**: Checks positions every 60 minutes (once per hour)
 - **Opportunity Scanner**: Scans a configurable watchlist for EMA9/21 crossover + RSI signals and automatically buys/sells on them (`scanner.py`, `trader.py: scan_and_execute`)
-- **Stop Loss Management**: Alerts when positions move 5% in either direction
-- **Re-entry Suggestions**: Recommends re-entries when positions pullback 5% from peak
+- **Stop Loss Management**: Automatically closes a position when it moves 5% against entry (`STOP_LOSS_THRESHOLD`), or 8% from its peak (`TRAILING_STOP_THRESHOLD`)
+- **Re-entry**: Automatically adds to a position on a 5% pullback from its own peak (not entry price), gated by RSI momentum and a minimum position age (`MIN_REENTRY_AGE_HOURS`, default 4h) — places a real order, not just a suggestion
 - **Interactive CLI**: Easy-to-use command interface
 - **Paper Trading Support**: Works with Alpaca paper trading accounts
 
@@ -56,7 +56,8 @@ Edit `config/settings.py` (or set via `.env`) to customize:
 - `CHECK_INTERVAL_MINUTES`: How often to check positions (default: 60)
 - `STOP_LOSS_THRESHOLD`: Percentage threshold for the entry-anchored stop loss (default: 5%)
 - `TRAILING_STOP_THRESHOLD`: Percentage pullback from peak price for the trailing stop (default: 8%)
-- `REENTRY_THRESHOLD`: Percentage pullback for re-entry suggestions (default: 5%)
+- `REENTRY_THRESHOLD`: Percentage pullback **from a position's own tracked peak price** (not entry price) that triggers a real re-entry buy (default: 5%)
+- `MIN_REENTRY_AGE_HOURS`: Minimum time a position must have been open before a re-entry can fire — a fresh position's peak is just its entry price, so this stops an ordinary intraday dip minutes after a fill from being mistaken for a real pullback (default: 4h)
 - `MARKET_OPEN_HOUR/MINUTE`: Market opening time (default: 9:30 AM ET)
 - `MARKET_CLOSE_HOUR/MINUTE`: Market closing time (default: 4:00 PM ET)
 - `WATCHLIST`: Comma-separated symbols the opportunity scanner scans (default: `AAPL,MSFT,GOOGL,AMZN,NVDA,SPY,QQQ`)
@@ -114,7 +115,7 @@ Exiting...
 ## Notes
 
 - The scheduler runs in the background and monitors positions during market hours
-- The opportunity scanner (`scan_and_execute`) **automatically places buy/sell orders** on its signals with no manual approval step, subject to the guard conditions in `trader.py` (already-held symbol, `MAX_POSITIONS`, buying power). Re-entry suggestions are recommendations only, reviewed via the CLI — but as of 2026-07-09, the stop-loss threshold (`_handle_stop_loss`) **automatically closes the position** when it's breached, rather than just alerting.
+- The opportunity scanner (`scan_and_execute`) **automatically places buy/sell orders** on its signals with no manual approval step, subject to the guard conditions in `trader.py` (already-held symbol, `MAX_POSITIONS`, buying power). The stop-loss (`_handle_stop_loss`) and trailing-stop (`_handle_trailing_stop`) **automatically close** a position when breached, and re-entry (`_handle_reentry`) **automatically places a real buy order** on a qualifying pullback — none of these are advisory-only or require CLI review. Fires at most once per pullback episode (until a new peak resets it) and only after `MIN_REENTRY_AGE_HOURS` has elapsed.
 - The bot uses Alpaca's paper trading API by default (set in `.env`)
 - Position history is kept for the last 100 checks
 
@@ -126,7 +127,7 @@ Real trade opens/closes (scanner buys/sells, stop-loss/trailing-stop/re-entry tr
 - `TELEGRAM_BOT_TOKEN` — from [@BotFather](https://t.me/BotFather)
 - `TELEGRAM_CHAT_ID` — your personal chat ID with the bot
 
-Switched from WhatsApp (via CallMeBot) to Telegram on 2026-08-04 after CallMeBot's free quota ran out. `whatsapp_notifier.py` still exists (kept for reference/rollback) but nothing instantiates it anymore — `WHATSAPP_*` settings currently have no effect. `email_notifier.py` (SMTP-based) also still exists in the repo but `trader.py` no longer instantiates it — `EMAIL_*` settings currently have no effect.
+Switched from WhatsApp (via CallMeBot) to Telegram on 2026-08-04 after CallMeBot's free quota ran out. `whatsapp_notifier.py` still exists (kept for reference/rollback) but nothing instantiates it anymore — `WHATSAPP_*` settings currently have no effect. The old SMTP-based `email_notifier.py` was removed entirely on 2026-08-11 (it had zero call sites anywhere, unlike WhatsApp's deliberate keep-for-reference) — `EMAIL_*` settings no longer exist.
 
 ## Deployment
 

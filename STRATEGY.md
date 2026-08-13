@@ -107,6 +107,21 @@ re-entry could ever fire, making it dead code. 12.5% preserves the same
 ratio as the stock config (5%/8% = 0.625, applied to crypto's 20%) rather
 than a new guess.
 
+**Re-entry pullback is measured from the tracked peak, not entry price —
+easy to conflate, worth being explicit about.** `_handle_reentry` computes
+`(peak_price - current_price) / peak_price`, using `position_peak_prices`
+(the highest price observed since the position opened or its last reset),
+**not** `(entry_price - current_price) / entry_price` (a position's
+unrealized P&L). These can diverge substantially — e.g. the test account's
+AMZN sat around -3% unrealized P&L while its pullback from its own tracked
+peak was already past 6%, well over `REENTRY_THRESHOLD`. Don't infer
+whether a position is near a re-entry from its P&L display; check the
+peak-relative figure specifically. Also note: `reentry_fired` clears only
+on a *new* peak, so a position can sit past `REENTRY_THRESHOLD` from its
+peak indefinitely without re-entering, if it already fired once for that
+peak and hasn't since made a new high — see `KNOWN_LIMITATIONS.md` "State
+that matters" for the live AMZN example of exactly this.
+
 **Re-entry minimum age (4h, both stock and crypto)**: added after a real
 reentry fired on GOOGL (test account) ~2.5h after its original scan-buy,
 same trading session — `position_peak_prices[symbol]` is set to
@@ -317,6 +332,37 @@ open position. `trader.py`'s separate re-entry RSI gate (`limit=35` at
 line ~329) was deliberately left unchanged — it only calls `_compute_rsi`,
 which is window-length-invariant beyond ~15 bars, so it was never affected
 by this gap.
+
+## Path to real money
+
+Not a backtest-driven decision — the strategy is already as validated as
+this framework's backtests can make it (see "Rejected hypotheses" above:
+five separate attempts to beat it all failed). The remaining gate is real
+forward-test evidence on the live test account, tracked as three concrete
+milestones:
+
+1. **10 closed stock trades**, with `strategy_check.py`'s own forward-test
+   comparison (`trade_history.json` vs. a fresh backtest) showing live
+   results tracking the backtest, not diverging. As of 2026-08-13: **3**
+   (NVDA -5.19% stop-loss 07-17, MSFT +23.9% scanner RSI exit 08-04, GOOGL
+   -5.47% stop-loss 08-11 — all three confirmed via VPS logs to be exactly
+   the mechanism they appear to be, not a surprise).
+2. **1 closed crypto trade.** As of 2026-08-13: **0** — BTC/USD and
+   ETH/USD's RSI simply hasn't dropped below `BUY_RSI_MAX` since the
+   account opened, confirmed via VPS journalctl to be a live, correctly-
+   running job with no qualifying signal, not a stalled scheduler.
+3. **The `MIN_REENTRY_AGE_HOURS` gate observed firing correctly on a real
+   pullback dated after 2026-08-06** (either a real re-entry buy, or a
+   `REENTRY_SKIPPED` for a too-young position). Not yet observed — see the
+   `reentry_fired`-latch note above for why the test account's AMZN
+   specifically can't be the one to demonstrate this without a new high
+   first.
+
+Once all three are met, that's the point for an actual go/no-go
+conversation on switching to real money — not a fixed date, not a better
+backtest number. Revisit sooner only if real trade outcomes start
+diverging materially from what the backtest predicts (the exact thing
+milestone 1's forward-test comparison is built to catch).
 
 ## Open items — real, deliberately not acted on
 

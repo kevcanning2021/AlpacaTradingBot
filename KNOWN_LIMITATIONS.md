@@ -87,6 +87,20 @@ worth avoiding overlap with market hours if doing a lot of local pulls).
   predates this feature (or after any state-file loss), this
   conservatively treats it as freshly opened rather than leaving it
   permanently blocked from ever re-entering.
+- **`reentry_fired` can stay latched for as long as a position stays open
+  with no new peak, which can outlive an unrelated code change.** It only
+  clears when the position sets a fresh high above its currently-tracked
+  peak (`trader.py: check_positions`) — a real, observed case: the test
+  account's AMZN re-entered once on 2026-08-05 (before `MIN_REENTRY_AGE_HOURS`
+  existed), then spent the following week+ below that peak. Its
+  `reentry_fired` flag has stayed `True` the entire time, so even though
+  AMZN's pullback-from-peak has been well past `REENTRY_THRESHOLD` since
+  2026-08-12 (RSI and age both otherwise qualifying), it structurally
+  cannot fire another re-entry until it first rallies to a new high. This
+  isn't a bug — "one re-entry per pullback episode" is the intended
+  design — but it means a position's *current* pullback depth alone
+  doesn't tell you whether a re-entry is actually imminent; check
+  `reentry_state.json` for whether that symbol's flag is already set.
 - `win_streak`/`loss_streak` (`trader.py: _record_trade_outcome`) are
   **still in-memory only**, not persisted — a restart resets the streak
   count to 0. No longer drives any live behavior or notification as of
