@@ -155,3 +155,17 @@ gets them, not just whoever's driving a particular session.
     the wrong strategy. Any tool that reimplements core logic instead of
     calling the live version (usually for performance or backtest-speed
     reasons) needs to be found and moved in lockstep with it.
+
+23. **Even a change that feels "just a doc update" needs the same
+    diff-check discipline as any other pull (Lesson 6) — don't skip it
+    because the *intent* seems low-risk.** Pulled a docs-only commit into
+    both VPS clones without first checking `git log HEAD..origin/master`
+    on each one individually; production's clone turned out to be two
+    commits behind, not one, so the same pull silently also brought in a
+    same-day strategy-logic swap that had deliberately not been approved
+    for production yet. Caught before any restart could load it, reverted
+    with `git reset --hard` back to the pre-swap commit. What a change
+    *feels* like it should touch says nothing about what a given clone's
+    pull will actually bring in — the diff-check has to run every time,
+    on every target, regardless of how small or safe the intended change
+    seems.
