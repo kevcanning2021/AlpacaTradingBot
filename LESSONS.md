@@ -127,3 +127,31 @@ gets them, not just whoever's driving a particular session.
     can't distinguish "about to test the new logic" from "structurally
     can't reach it yet" — check the actual gating state, not just the
     metric the gate nominally responds to.
+
+21. **A short live window looking flat or negative doesn't mean a strategy
+    is broken — check the historical distribution of same-length windows
+    for that exact strategy before concluding anything.** After ~1 month
+    live the test account sat near breakeven, and it felt like proof
+    something needed fixing. Computing every historical ~1-month rolling
+    window from the same 22-month backtest showed 33% of all such windows
+    were negative and the median was only +0.20% — the live result was
+    almost exactly the median outcome, not an outlier. Lesson 8's
+    leave-one-out check catches a *symbol* outlier hiding inside an
+    aggregate; it says nothing about whether a given *time window* is
+    unusual. These are different axes of variance and need different
+    checks — compute the actual rolling-window distribution before
+    treating a flat or bad stretch as a signal that something's wrong.
+
+22. **When a live strategy's core signal logic changes, grep the whole repo
+    for every standalone reimplementation of the old logic — don't assume
+    the primary module is the only copy.** Swapping the stock scanner from
+    an EMA9/21 crossover to Bollinger Band mean-reversion only required
+    editing `scanner.py` itself, but `strategy_check.py`'s daily
+    drift-detection backtest and `telegram_bot.py`'s `/optimize` grid
+    search each had their *own* independent reimplementation of the old
+    EMA logic for their own on-demand backtesting. Left alone, both would
+    have silently kept validating and grid-searching a strategy that was
+    no longer actually deployed, producing plausible-looking numbers for
+    the wrong strategy. Any tool that reimplements core logic instead of
+    calling the live version (usually for performance or backtest-speed
+    reasons) needs to be found and moved in lockstep with it.
