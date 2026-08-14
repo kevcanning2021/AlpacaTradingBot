@@ -6,7 +6,7 @@ A Python-based trading bot that monitors your positions during market hours, aut
 
 - **Market Hours Monitoring**: Runs only during market hours (9:30 AM - 4:00 PM ET, Mon-Fri)
 - **Periodic Checks**: Checks positions every 60 minutes (once per hour)
-- **Opportunity Scanner**: Scans a configurable watchlist for EMA9/21 crossover + RSI signals and automatically buys/sells on them (`scanner.py`, `trader.py: scan_and_execute`)
+- **Opportunity Scanner**: Scans a configurable watchlist and automatically buys/sells on the signal (`scanner.py`, `trader.py: scan_and_execute`). Stocks use Bollinger Band(20,2) mean-reversion (RSI-confirmed lower-band bounce entry, middle-band/overbought exit); crypto uses EMA9/21 crossover + RSI — see `STRATEGY.md` for why these differ and the backtest behind each
 - **Stop Loss Management**: Automatically closes a position when it moves 5% against entry (`STOP_LOSS_THRESHOLD`), or 8% from its peak (`TRAILING_STOP_THRESHOLD`)
 - **Re-entry**: Automatically adds to a position on a 5% pullback from its own peak (not entry price), gated by RSI momentum and a minimum position age (`MIN_REENTRY_AGE_HOURS`, default 4h) — places a real order, not just a suggestion
 - **Interactive CLI**: Easy-to-use command interface
@@ -75,7 +75,7 @@ Edit `config/settings.py` (or set via `.env`) to customize:
 - `main.py` - Entry point
 - `cli.py` - Interactive command-line interface
 - `scheduler.py` - APScheduler integration for market hours monitoring
-- `scanner.py` - EMA9/21 crossover + RSI opportunity scanner
+- `scanner.py` - Opportunity scanner (Bollinger Band mean-reversion for stocks, EMA9/21 crossover + RSI for crypto)
 - `trader.py` - Core trading logic, position management, and scanner order execution
 - `alpaca_client.py` - Alpaca API wrapper
 - `config/settings.py` - Configuration parameters

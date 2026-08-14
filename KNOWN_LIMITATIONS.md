@@ -15,6 +15,15 @@ is why scanner buys use notional/fractional-dollar sizing instead (see
 is a separate git clone, venv, and `.env` — fully independent, no shared
 state.
 
+**Not currently running the same code.** As of 2026-08-14, the test
+account's stock scanner uses Bollinger Band mean-reversion while
+production's stays on the original EMA9/21 crossover — a deliberate,
+temporary divergence pending the milestone-gated real-money decision
+(see `STRATEGY.md`), not a deployment gap to close. Check `git log -1`
+on each `/opt/alpaca-bot*` clone before assuming they're in sync; the
+"same code, different account size" description above is the normal
+state, not a guarantee that always holds.
+
 A third service, `alpaca-dashboard.service`, is a read-only monitoring PWA
 (separate branch, not yet merged to `master`).
 
@@ -31,11 +40,16 @@ Added 2026-07-16, root crontab on the VPS (`0 * * * *`, test account only,
 `/opt/alpaca-bot-test`), logs to `/var/log/alpaca-strategy-check.log`.
 Alert-only (Telegram, same cooldown pattern as `watchdog.py`) — never
 trades, never edits thresholds. Hourly: re-runs the live scanner for a
-signal-health check. Daily, after close: re-backtests `BUY_RSI_MAX`/
-`SELL_RSI_MIN` against fresh bars. Building it surfaced a real gap between
-how the strategy was backtested and how the live scanner computed signals
-each check (undercooked EMA21 from too short a bar window) — found and
-fixed same day (`scanner.py: SIGNAL_BAR_WINDOW`), see `STRATEGY.md`
+signal-health check. Daily, after close: re-backtests each watchlist
+against fresh bars using whatever signal logic that asset class actually
+runs live — Bollinger Band mean-reversion for stocks, EMA9/21 crossover
+for crypto (see `STRATEGY.md` for the 2026-08-14 split; this script has
+its own standalone reimplementation of both, not a call into `scanner.py`,
+so it has to be kept in lockstep by hand whenever the live logic changes —
+see repo `LESSONS.md` #22). Building it originally surfaced a real gap
+between how the strategy was backtested and how the live scanner computed
+signals each check (undercooked EMA21 from too short a bar window) — found
+and fixed same day (`scanner.py: SIGNAL_BAR_WINDOW`), see `STRATEGY.md`
 "Automated monitoring" for the full investigation.
 
 ## Strategy Review — a scheduled cloud routine, not disabled
