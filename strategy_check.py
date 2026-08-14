@@ -37,7 +37,7 @@ import os
 from datetime import datetime, timezone
 
 from alpaca_client import AlpacaClient, position_symbol
-from scanner import OpportunityScanner, _compute_ema, _compute_rsi
+from scanner import OpportunityScanner, _compute_ema, _compute_rsi, _compute_bollinger
 from telegram_notifier import TelegramNotifier
 from config import settings
 
@@ -171,12 +171,48 @@ def _simulate_trades(bars, buy_rsi_max, sell_rsi_min):
     return trades
 
 
+def _simulate_trades_bollinger(bars, oversold_rsi, sell_rsi_min, period, num_std):
+    """Bollinger Band mean-reversion equivalent of _simulate_trades above, matching
+    OpportunityScanner._analyze_bollinger exactly (buy on a lower-band bounce with
+    RSI confirmation, sell on reversion to the middle band or overbought) — this is
+    the live stock signal source as of 2026-08-14. See STRATEGY.md and
+    scanner.py: OpportunityScanner.BOLLINGER_* for the backtest that justified it."""
+    closes = [float(b['c']) for b in bars]
+    mid, upper, lower = _compute_bollinger(closes, period, num_std)
+    trades = []
+    in_position = False
+    entry_price = 0.0
+
+    for i in range(period, len(closes)):
+        if lower[i] is None or lower[i - 1] is None or mid[i] is None:
+            continue
+        rsi = _compute_rsi(closes[max(0, i - 40):i + 1])
+        price = closes[i]
+        prev_price = closes[i - 1]
+
+        if not in_position:
+            if prev_price < lower[i - 1] and price > lower[i] and rsi < oversold_rsi:
+                in_position = True
+                entry_price = price
+        else:
+            if price >= mid[i] or rsi > sell_rsi_min:
+                trades.append((price - entry_price) / entry_price)
+                in_position = False
+
+    return trades
+
+
 def _backtest_watchlist(client, watchlist):
     bars_by_symbol = client.get_bars_multi(watchlist, limit=BACKTEST_LOOKBACK_BARS)
     per_symbol = {}
     for symbol in watchlist:
         bars = bars_by_symbol.get(symbol, [])
-        per_symbol[symbol] = _simulate_trades(bars, OpportunityScanner.BUY_RSI_MAX, OpportunityScanner.SELL_RSI_MIN)
+        if '/' in symbol:
+            per_symbol[symbol] = _simulate_trades(bars, OpportunityScanner.BUY_RSI_MAX, OpportunityScanner.SELL_RSI_MIN)
+        else:
+            per_symbol[symbol] = _simulate_trades_bollinger(
+                bars, OpportunityScanner.BOLLINGER_OVERSOLD_RSI, OpportunityScanner.SELL_RSI_MIN,
+                OpportunityScanner.BOLLINGER_PERIOD, OpportunityScanner.BOLLINGER_STD)
 
     all_trades = [t for trades in per_symbol.values() for t in trades]
     if not all_trades:

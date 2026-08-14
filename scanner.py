@@ -28,6 +28,27 @@ def _compute_rsi(prices: List[float], period: int = 14) -> float:
     return 100 - (100 / (1 + avg_gain / avg_loss))
 
 
+def _compute_bollinger(prices: List[float], period: int = 20, num_std: float = 2):
+    """Rolling SMA +/- num_std*stdev, aligned to `prices` like _compute_ema
+    (leading Nones for the first `period`-1 entries). Unlike EMA, a rolling
+    SMA/stdev has no seed-convergence lag -- it only ever depends on the
+    trailing `period` closes, so it's not sensitive to how many extra bars
+    the caller fetched beyond that."""
+    n = len(prices)
+    mid = [None] * n
+    upper = [None] * n
+    lower = [None] * n
+    for i in range(period - 1, n):
+        window = prices[i - period + 1:i + 1]
+        m = sum(window) / period
+        var = sum((p - m) ** 2 for p in window) / period
+        sd = var ** 0.5
+        mid[i] = m
+        upper[i] = m + num_std * sd
+        lower[i] = m - num_std * sd
+    return mid, upper, lower
+
+
 class OpportunityScanner:
     """Scans a watchlist for EMA crossover + RSI signals and returns trade recommendations."""
 
@@ -59,21 +80,50 @@ class OpportunityScanner:
     # STRATEGY.md "Automated monitoring" for the full investigation.
     SIGNAL_BAR_WINDOW = 90
 
+    # Bollinger Band(20, 2) mean-reversion -- stock signal source as of 2026-08-14,
+    # replacing the EMA9/21 crossover above (crypto keeps EMA9/21, see
+    # _analyze_bars). Backtested against 22 months of real daily bars (full
+    # walk-forward: entries, 5%/8% stops, reentry, $10/4-max/$50 test-account
+    # sizing) after Kevin flagged that a "flat month" felt like the strategy not
+    # working: EMA9/21 baseline's total return over that window is basically a
+    # wash vs. this (+17.37% vs +16.67%), but Bollinger wins far more often
+    # (70.5% vs 48.0% win rate) and roughly halves how often a 1-month rolling
+    # window is a loser (19.1% vs 33.0%), at the cost of a fatter single-worst-
+    # month tail (-7.09% vs -5.56%). Positive independently on both train and
+    # holdout halves (unlike a same-day MACD(12,26,9) variant, which lost on
+    # train and was rejected as overfit) and not outlier-driven -- every
+    # leave-one-symbol-out result stayed solidly positive. See STRATEGY.md.
+    BOLLINGER_PERIOD = 20
+    BOLLINGER_STD = 2
+    BOLLINGER_OVERSOLD_RSI = 40  # entry confirmation: RSI must also say oversold
+
     def __init__(self, client):
         self.client = client
 
     def _analyze_bars(self, symbol: str, bars: List[Dict]) -> Dict:
         """Pure signal computation from already-fetched bars, kept separate from the
-        batched fetch in scan() so signal logic and I/O don't get tangled together."""
+        batched fetch in scan() so signal logic and I/O don't get tangled together.
+
+        Stocks use Bollinger Band mean-reversion; crypto keeps the original
+        EMA9/21 crossover -- the Bollinger backtest (see BOLLINGER_* above) only
+        ever covered the stock watchlist, so crypto is deliberately left alone
+        rather than carrying an unvalidated change over to a very different
+        volatility regime.
+        """
         if len(bars) < 22:
             return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history', 'price': 0.0}
 
         closes = [float(b['c']) for b in bars]
         price = closes[-1]
+        rsi = _compute_rsi(closes)
 
+        if '/' in symbol:
+            return self._analyze_ema_crossover(symbol, closes, price, rsi)
+        return self._analyze_bollinger(symbol, closes, price, rsi)
+
+    def _analyze_ema_crossover(self, symbol: str, closes: List[float], price: float, rsi: float) -> Dict:
         ema9 = _compute_ema(closes, 9)
         ema21 = _compute_ema(closes, 21)
-        rsi = _compute_rsi(closes)
 
         # Both arrays end at the same bar; compare last two values for crossover
         if len(ema9) < 2 or len(ema21) < 2:
@@ -102,6 +152,37 @@ class OpportunityScanner:
             'rsi': round(rsi, 2),
             'ema9': round(ema9[-1], 4),
             'ema21': round(ema21[-1], 4),
+        }
+
+    def _analyze_bollinger(self, symbol: str, closes: List[float], price: float, rsi: float) -> Dict:
+        mid, upper, lower = _compute_bollinger(closes, self.BOLLINGER_PERIOD, self.BOLLINGER_STD)
+
+        if len(lower) < 2 or lower[-1] is None or lower[-2] is None or mid[-1] is None:
+            return {'symbol': symbol, 'signal': 'hold', 'reason': 'Bollinger calculation failed', 'price': price, 'rsi': rsi}
+
+        prev_price = closes[-2]
+
+        # Buy: bouncing back above the lower band after closing below it
+        # (oversold reversion), RSI confirms momentum has actually turned.
+        if prev_price < lower[-2] and price > lower[-1] and rsi < self.BOLLINGER_OVERSOLD_RSI:
+            signal, reason = 'buy', f'Bollinger lower-band bounce (RSI {rsi:.1f})'
+        # Sell: reverted to the mean (target hit) or overbought -- same
+        # SELL_RSI_MIN overbought exit as the EMA crossover branch.
+        elif price >= mid[-1] or rsi > self.SELL_RSI_MIN:
+            signal = 'sell'
+            reason = f'Reverted to middle band (RSI {rsi:.1f})' if price >= mid[-1] else f'Overbought RSI {rsi:.1f}'
+        else:
+            signal, reason = 'hold', f'No signal (RSI {rsi:.1f})'
+
+        return {
+            'symbol': symbol,
+            'signal': signal,
+            'reason': reason,
+            'price': price,
+            'rsi': round(rsi, 2),
+            'bb_mid': round(mid[-1], 4),
+            'bb_lower': round(lower[-1], 4),
+            'bb_upper': round(upper[-1], 4) if upper[-1] is not None else None,
         }
 
     def scan(self, watchlist: List[str]) -> List[Dict]:

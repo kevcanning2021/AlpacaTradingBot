@@ -9,11 +9,24 @@ and every rejected idea is recorded so it doesn't get re-tried blind.
 
 ## What the bot actually does (current, live)
 
-**Entry**: `scanner.py: OpportunityScanner._analyze` — buy when EMA9
-crosses above EMA21 **and** RSI(14) < `BUY_RSI_MAX`.
+**Stocks (since 2026-08-14): Bollinger Band(20,2) mean-reversion**
+(`scanner.py: OpportunityScanner._analyze_bollinger`). **Entry**: price
+closes below the lower band, then a later close moves back above it (a
+bounce), **and** RSI(14) < `BOLLINGER_OVERSOLD_RSI` (40) confirms the
+reversion. **Exit**: price reverts to/through the middle band (target hit),
+**or** RSI(14) > `SELL_RSI_MIN`, same overbought exit as before.
 
-**Exit**: sell when EMA9 crosses below EMA21, **or** RSI(14) >
-`SELL_RSI_MIN`, regardless of crossover state.
+**Crypto: unchanged, EMA9/21 crossover** (`scanner.py:
+OpportunityScanner._analyze_ema_crossover`). **Entry**: EMA9 crosses above
+EMA21 **and** RSI(14) < `BUY_RSI_MAX`. **Exit**: EMA9 crosses below EMA21,
+**or** RSI(14) > `SELL_RSI_MIN`, regardless of crossover state. The
+Bollinger backtest below only ever covered the stock watchlist, so crypto
+deliberately kept its original logic rather than carrying an unvalidated
+change into a very different volatility regime.
+
+`_analyze_bars` routes by `'/' in symbol` (the same test already used
+elsewhere for asset-class splits), so this is one function per watchlist,
+not a global switch.
 
 RSI is a simple/Cutler's-style 14-period average of gains/losses
 (`scanner.py: _compute_rsi`), not Wilder-smoothed. This is intentional —
@@ -48,9 +61,11 @@ touch each other's positions.
 
 | Threshold | Value (stock / crypto) | Location | Last verified |
 |---|---|---|---|
-| `BUY_RSI_MAX` | 65 / 65 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
+| `BUY_RSI_MAX` | n/a (Bollinger doesn't use it) / 65 | `scanner.py` | 2026-07-16 (stock, pre-Bollinger), 2026-07-17 (crypto, not contradicted) |
 | `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
-| `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest |
+| `BOLLINGER_PERIOD` / `BOLLINGER_STD` | 20 / 2 (stock only) | `scanner.py` | 2026-08-14 |
+| `BOLLINGER_OVERSOLD_RSI` | 40 (stock only) | `scanner.py` | 2026-08-14 |
+| `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest (crypto EMA path); Bollinger doesn't need this much history (see below) |
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
 | Re-entry | 5% / 12.5% | `config/settings.py` | 2026-07-14 |
@@ -281,6 +296,79 @@ watchlist ever changes (a future screen might land on symbols where this
 correlation doesn't hold), not a permanently-closed question the way the
 07-16/07-23 watchlist-widening attempts are.
 
+**Stock signal source switched EMA9/21 → Bollinger Band mean-reversion,
+2026-08-14** (committed, pushed, deployed to `alpaca-bot-test` only —
+production untouched pending the milestone-gated real-money decision).
+Kevin's frustration point: the test account sat essentially flat (~+0.3%)
+after a month live, and after five already-rejected threshold/filter/
+sizing hypotheses (see below), the ask was explicitly for something
+genuinely different, not another tweak. Two untried indicator frameworks
+(flagged since 08-07) were backtested against 22 months of real daily
+bars (Oct 2024–Aug 2026, 460 trading days), full walk-forward simulation
+(real entries, 5%/8% stops, reentry, exact test-account sizing —
+$10/position, 4 max, $50 start), proper train/holdout split (older/newer
+half):
+- **MACD(12,26,9) crossover, same RSI 65/80 filter — rejected.** Lost
+  money on the training half (-6.37%/-0.34%%/trade) and only looked good
+  on holdout (+16.76%, +1.42%/trade) — the exact overfitting signature
+  Lesson #10/#15 already warn about (a variant that only wins where it
+  wasn't selected). Full-window aggregate (+10.83% total, 0.51%/trade)
+  was also worse than baseline. Not implemented.
+- **Bollinger Band(20,2) mean-reversion — implemented.** Buy: price
+  closes below the lower band then bounces back above it, RSI(14) < 40
+  confirms; sell: price reverts to the middle band, or RSI > 80
+  (unchanged overbought exit). Positive **independently on both halves**
+  (train +5.04%/1.00%/trade, holdout +11.62%/2.22%/trade) — passes the
+  check MACD failed. Robust to leave-one-symbol-out: every excl-one
+  result stayed solidly positive (+9.4% to +16.5% total), not one
+  symbol's story. Full-window: 44 trades, +16.67% total, +1.66%/trade,
+  **70.5% win rate** vs. baseline EMA9/21's 48.0%.
+- **Total return is a statistical wash against the baseline** (+16.67%
+  vs. +17.37% over the same 22 months) — this is not a "better strategy"
+  claim. What it changes: computed every possible ~1-month (21-trading-
+  day) rolling window across the full history for both variants.
+  Baseline: 33.0% of all 1-month windows were negative, median +0.20%.
+  Bollinger: **19.1%** negative, median **+0.47%**. Roughly halves how
+  often a month looks like Kevin's actual complaint. Trade-off: a fatter
+  single-worst-month tail (-7.09% vs. -5.56%).
+- **Verified against the actual deployed code path, not just the
+  standalone backtest** — replayed the same walk-forward simulation
+  calling the real, modified `scanner.py: OpportunityScanner._analyze_bars`
+  with the real 90-bar rolling window per check (matching exactly how
+  live `scan()` calls it), not a from-scratch reimplementation. Came back
+  close (41 trades, +1.61%/trade, 68.3% win, +15.20% total) — small gap
+  from the continuous-series validation run is expected and fine, a
+  wildly different number would have meant an implementation bug.
+  Bollinger has no EMA-style seed-convergence lag (a rolling SMA/stdev
+  only ever depends on its trailing `BOLLINGER_PERIOD` closes), so unlike
+  the original EMA9/21 windowing gap (Lesson: see the 2026-07-16 entry
+  below), the 90-bar window was never actually a concern here — kept
+  unchanged only because it doesn't hurt correctness, not because
+  Bollinger needed it.
+- **Crypto deliberately untouched** — this backtest only ever covered the
+  7-symbol stock watchlist; BTC/USD and ETH/USD keep the original EMA9/21
+  logic (`_analyze_ema_crossover`) until/unless a crypto-specific
+  Bollinger backtest exists, same discipline as every other stock/crypto
+  threshold split on this page.
+- **`strategy_check.py`'s daily re-backtest updated to match** — it had
+  its own standalone reimplementation of the EMA crossover
+  (`_simulate_trades`) for its drift-detection job; without a matching
+  `_simulate_trades_bollinger`, it would have kept silently validating
+  live stock results against the strategy that's no longer deployed.
+  Now routes per-symbol by `'/' in symbol`, same as the live scanner.
+  `telegram_bot.py: /optimize` (an RSI-threshold grid search specific to
+  the EMA framework) now skips the stock watchlist with an explicit note
+  rather than grid-searching a threshold (`BUY_RSI_MAX`) the live stock
+  strategy no longer uses at all — `/backtest` still works for both
+  watchlists since it just calls `_backtest_watchlist`, now branch-aware.
+- **Not yet observed live** — this is a backtest-driven decision, same
+  category as the original EMA9/21 rollout, not yet forward-tested
+  against real fills. Revisit the milestone-1 forward-test comparison
+  (`strategy_check.py`) once enough trades close under the new logic —
+  the existing 3 closed stock trades (NVDA/MSFT/GOOGL) predate this
+  change and were all under the EMA9/21 strategy, so they don't carry
+  forward as evidence for or against Bollinger.
+
 ## Automated monitoring: `strategy_check.py`
 
 A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
@@ -409,10 +497,12 @@ milestone 1's forward-test comparison is built to catch).
   from volatility-adjusted — sizes off estimated win-rate/payoff ratio
   rather than volatility, so wouldn't share the same failure mode, but
   needs a stable win-rate estimate this account's ~31-trade backtest
-  sample may be too thin to trust) and different indicators entirely
-  (MACD, Bollinger Bands) rather than filters layered on the existing
-  EMA9/21+RSI core. Both are real time investments, not quick follow-ups
-  — not started.
+  sample may be too thin to trust) — not started.
+  ~~Different indicators entirely (MACD, Bollinger Bands)~~ **Tried
+  2026-08-14**: MACD rejected (overfit — lost on train, won on holdout);
+  Bollinger Band mean-reversion implemented for stocks, see the dated
+  entry above. Kelly sizing remains the one real untried lever from this
+  list.
 
 ## How to backtest a change
 
