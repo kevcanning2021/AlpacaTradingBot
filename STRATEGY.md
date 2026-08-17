@@ -431,10 +431,14 @@ milestones:
 
 1. **10 closed stock trades**, with `strategy_check.py`'s own forward-test
    comparison (`trade_history.json` vs. a fresh backtest) showing live
-   results tracking the backtest, not diverging. As of 2026-08-13: **3**
+   results tracking the backtest, not diverging. As of 2026-08-14: **5**
    (NVDA -5.19% stop-loss 07-17, MSFT +23.9% scanner RSI exit 08-04, GOOGL
-   -5.47% stop-loss 08-11 — all three confirmed via VPS logs to be exactly
-   the mechanism they appear to be, not a surprise).
+   -5.47% stop-loss 08-11 — all three under the old EMA9/21 logic, confirmed
+   via VPS logs to be exactly the mechanism they appear to be; then AMZN
+   -4.74% and SPY +2.15%, both scanner sells — "Reverted to middle band" —
+   confirmed via VPS logs at 2026-08-14 13:33:50 UTC, the first two real
+   trades under the Bollinger Band logic below. Still far too few of the
+   Bollinger ones (2) to compare against its 70.5%-win-rate backtest).
 2. **1 closed crypto trade.** As of 2026-08-13: **0** — BTC/USD and
    ETH/USD's RSI simply hasn't dropped below `BUY_RSI_MAX` since the
    account opened, confirmed via VPS journalctl to be a live, correctly-
