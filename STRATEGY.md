@@ -9,24 +9,39 @@ and every rejected idea is recorded so it doesn't get re-tried blind.
 
 ## What the bot actually does (current, live)
 
-**Stocks (since 2026-08-14): Bollinger Band(20,2) mean-reversion**
-(`scanner.py: OpportunityScanner._analyze_bollinger`). **Entry**: price
-closes below the lower band, then a later close moves back above it (a
-bounce), **and** RSI(14) < `BOLLINGER_OVERSOLD_RSI` (40) confirms the
-reversion. **Exit**: price reverts to/through the middle band (target hit),
-**or** RSI(14) > `SELL_RSI_MIN`, same overbought exit as before.
+**Stocks (since 2026-08-17): dual signal sources — Bollinger Band(20,2)
+mean-reversion AND EMA9/21 crossover, running in parallel, not one
+replacing the other.** A stock symbol with no open position is checked
+against both methods each scan (`scanner.py:
+OpportunityScanner._analyze_bars`); whichever fires first opens the
+position (Bollinger preferred on a same-day tie). Once open, that position
+is checked **only** against the method that opened it — never a mixed
+rule:
+- **Bollinger entry**: price closes below the lower band, then a later
+  close moves back above it (a bounce), **and** RSI(14) <
+  `BOLLINGER_OVERSOLD_RSI` (40) confirms the reversion. **Exit**: price
+  reverts to/through the middle band, **or** RSI(14) > `SELL_RSI_MIN`.
+- **EMA entry**: EMA9 crosses above EMA21 **and** RSI(14) < `BUY_RSI_MAX`
+  (65). **Exit**: EMA9 crosses below EMA21, **or** RSI(14) >
+  `SELL_RSI_MIN`.
 
-**Crypto: unchanged, EMA9/21 crossover** (`scanner.py:
-OpportunityScanner._analyze_ema_crossover`). **Entry**: EMA9 crosses above
-EMA21 **and** RSI(14) < `BUY_RSI_MAX`. **Exit**: EMA9 crosses below EMA21,
-**or** RSI(14) > `SELL_RSI_MIN`, regardless of crossover state. The
-Bollinger backtest below only ever covered the stock watchlist, so crypto
-deliberately kept its original logic rather than carrying an unvalidated
-change into a very different volatility regime.
+Which method opened a position is persisted (`trader.py:
+self.position_methods`, `position_method_state.json`) so it survives a
+restart and so `scan_and_execute()` evaluates a held position correctly —
+without this, a Bollinger-opened position could get evaluated against
+EMA's exit rule (or vice versa) after a restart, which would be a silent
+correctness bug, not just a missed optimization.
 
-`_analyze_bars` routes by `'/' in symbol` (the same test already used
-elsewhere for asset-class splits), so this is one function per watchlist,
-not a global switch.
+**Crypto: unchanged, EMA9/21 crossover only** (`scanner.py:
+OpportunityScanner._analyze_ema_crossover`), same entry/exit rule as the
+EMA branch above. Never part of the dual setup — the backtest behind it
+only ever covered the stock watchlist, so crypto deliberately kept its
+single original method rather than carrying an unvalidated change into a
+very different volatility regime.
+
+`_analyze_bars` routes by `'/' in symbol` for crypto vs. stock, then by
+`held_method` for which of the two stock methods applies to an already-open
+position — the same test already used elsewhere for asset-class splits.
 
 RSI is a simple/Cutler's-style 14-period average of gains/losses
 (`scanner.py: _compute_rsi`), not Wilder-smoothed. This is intentional —
@@ -61,7 +76,7 @@ touch each other's positions.
 
 | Threshold | Value (stock / crypto) | Location | Last verified |
 |---|---|---|---|
-| `BUY_RSI_MAX` | n/a (Bollinger doesn't use it) / 65 | `scanner.py` | 2026-07-16 (stock, pre-Bollinger), 2026-07-17 (crypto, not contradicted) |
+| `BUY_RSI_MAX` | 65 (EMA branch only) / 65 | `scanner.py` | 2026-07-16 (stock, pre-Bollinger), 2026-07-17 (crypto, not contradicted) |
 | `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
 | `BOLLINGER_PERIOD` / `BOLLINGER_STD` | 20 / 2 (stock only) | `scanner.py` | 2026-08-14 |
 | `BOLLINGER_OVERSOLD_RSI` | 40 (stock only) | `scanner.py` | 2026-08-14 |
@@ -368,6 +383,60 @@ half):
   the existing 3 closed stock trades (NVDA/MSFT/GOOGL) predate this
   change and were all under the EMA9/21 strategy, so they don't carry
   forward as evidence for or against Bollinger.
+
+**Dual stock signal sources added — Bollinger AND EMA9/21, not either/or,
+2026-08-17.** Kevin's ask: after seeing the account go flat (zero open
+positions) once Bollinger closed both open trades the same day, he wanted
+more real trade frequency. A grid search loosening Bollinger's own
+`BOLLINGER_STD`/`BOLLINGER_OVERSOLD_RSI` (narrower bands, looser RSI) found
+every variant that traded more often also traded worse — the one
+training-selected "winner" collapsed on holdout (+0.35%/trade vs. the live
+baseline's +2.22%), the same overfitting signature as the earlier MACD
+rejection. So loosening one strategy's own bar wasn't the answer. Instead,
+tried something structurally different: running Bollinger and the original
+EMA9/21 crossover as two **independent** entry sources on the same 7-symbol
+watchlist, sharing the same `MAX_POSITIONS`/capital cap (not more risk, more
+ways to find a real signal) — since both were already separately validated
+over months of work, this isn't a new tuned parameter that could be
+curve-fit the way a threshold grid can.
+- **Backtest (22 months, full walk-forward, exact test-account sizing)**:
+  90 trades (vs. 44 Bollinger-only / 50 EMA-only — genuinely close to
+  double, not a marginal bump), **+1.71%/trade** (higher than either single
+  strategy alone, not diluted between them), **+35.89% total return** (vs.
+  +16.67% / +17.37% single-strategy) — more capital cycling through equally
+  good trades in the same $40 envelope, not lower-quality ones.
+- **Positive independently on train (+18.25%) and holdout (+15.70%)** —
+  passes the check the frequency-grid "winner" and MACD both failed.
+  **Leave-one-symbol-out stays solidly positive everywhere** (+1.20% to
+  +2.19%), not one symbol's story.
+- **A held position's exit is governed by whichever method opened it, never
+  a mixed rule.** `trader.py: self.position_methods` (persisted,
+  `position_method_state.json`, same restart-safety pattern as
+  `peak_prices`/`reentry_fired`) records this per symbol; `scanner.py:
+  OpportunityScanner._analyze_bars` takes a `held_method` param and routes
+  accordingly — a symbol with no open position is checked against both
+  methods (Bollinger preferred on same-day tie).
+- **Verified against the actual deployed code path**: replayed the
+  walk-forward simulation through the real, modified `_analyze_bars` with
+  the real 90-bar rolling window and real position-method tracking — came
+  back close (78 trades, +1.80%/trade, 59.0% win, +34.16% total vs. the
+  standalone validation's 90/+1.71%/58.9%/+35.89%), confirming no
+  implementation bug, same small-gap pattern as the original Bollinger
+  verification.
+- **`strategy_check.py` and `telegram_bot.py` updated to match** — the
+  daily re-backtest's `_simulate_trades_bollinger` (Bollinger-only) was
+  replaced with `_simulate_trades_dual` (both methods, entry-method-aware
+  exit, matching the live logic exactly); the hourly signal-health check
+  now reads `position_method_state.json` (read-only — it's a separate
+  process from the live trading service) so a held position's "stuck sell"
+  check evaluates the right method instead of defaulting to one; `/backtest`
+  and `/optimize`'s stock-skip message both updated to describe dual
+  instead of Bollinger-only.
+- **Crypto untouched** — still single EMA9/21, never part of this backtest.
+- **Not yet observed live**, same as the original Bollinger rollout — the 5
+  closed stock trades so far (3 EMA9/21-era, 2 Bollinger) predate this and
+  don't carry forward as evidence for or against the dual approach
+  specifically.
 
 ## Automated monitoring: `strategy_check.py`
 

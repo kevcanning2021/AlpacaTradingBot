@@ -169,9 +169,10 @@ def run_backtest(client: AlpacaClient) -> str:
     "Rejected hypotheses" for why that kind of test needs careful out-of-sample
     review, not a one-tap command."""
     lines = [
-        f"Stock: Bollinger({OpportunityScanner.BOLLINGER_PERIOD},{OpportunityScanner.BOLLINGER_STD}), "
-        f"oversold RSI<{OpportunityScanner.BOLLINGER_OVERSOLD_RSI}, SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}",
-        f"Crypto: EMA9/21, BUY_RSI_MAX={OpportunityScanner.BUY_RSI_MAX}, SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}",
+        f"Stock: Bollinger({OpportunityScanner.BOLLINGER_PERIOD},{OpportunityScanner.BOLLINGER_STD}) "
+        f"oversold RSI<{OpportunityScanner.BOLLINGER_OVERSOLD_RSI} + EMA9/21 crossover "
+        f"BUY_RSI_MAX={OpportunityScanner.BUY_RSI_MAX} (dual, either fires), SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}",
+        f"Crypto: EMA9/21 only, BUY_RSI_MAX={OpportunityScanner.BUY_RSI_MAX}, SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}",
         '',
     ]
     for label, watchlist in (('Stock', settings.WATCHLIST), ('Crypto', settings.CRYPTO_WATCHLIST)):
@@ -202,16 +203,16 @@ def run_optimize(client: AlpacaClient) -> str:
         if not watchlist:
             continue
         if label == 'Stock':
-            # This grid searches BUY_RSI_MAX x SELL_RSI_MIN against the EMA9/21
-            # crossover -- the live stock signal as of 2026-08-14 is Bollinger Band
-            # mean-reversion instead (see scanner.py: OpportunityScanner.BOLLINGER_*),
-            # which doesn't use BUY_RSI_MAX at all. Running this grid against stocks
-            # would silently optimize a strategy that isn't deployed. Skipping rather
-            # than reporting a misleading number; a Bollinger-parameter optimizer
-            # would need its own dedicated grid, not a quick reuse of this one.
-            lines.append('Stock: skipped -- /optimize grid-searches BUY_RSI_MAX/SELL_RSI_MIN for the '
-                          'EMA9/21 strategy, which stocks no longer run (Bollinger mean-reversion since '
-                          '2026-08-14). Use /backtest for the current stock strategy\'s live numbers.')
+            # This grid searches BUY_RSI_MAX x SELL_RSI_MIN against a single EMA9/21
+            # crossover -- stocks run a dual strategy since 2026-08-17 (Bollinger
+            # mean-reversion + EMA9/21, either can open a position, see scanner.py:
+            # OpportunityScanner class docstring), so a single-parameter RSI grid
+            # doesn't map onto what's actually deployed. Skipping rather than
+            # reporting a misleading number; a dual-strategy optimizer would need
+            # its own dedicated grid, not a quick reuse of this one.
+            lines.append('Stock: skipped -- /optimize grid-searches BUY_RSI_MAX/SELL_RSI_MIN for a single '
+                          'EMA9/21 strategy, which stocks no longer run alone (dual Bollinger+EMA9/21 since '
+                          '2026-08-17). Use /backtest for the current stock strategy\'s live numbers.')
             continue
         bars_by_symbol = client.get_bars_multi(watchlist, limit=OPTIMIZE_LOOKBACK_BARS)
         older = {s: b[:len(b) // 2] for s, b in bars_by_symbol.items()}

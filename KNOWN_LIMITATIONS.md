@@ -84,14 +84,20 @@ whatever live service uses the same key, and has caused transient request
 timeouts on the live service before (self-resolved, no lasting harm, but
 worth avoiding overlap with market hours if doing a lot of local pulls).
 
-## State that matters: peak prices, re-entry, and streaks
+## State that matters: peak prices, re-entry, position method, and streaks
 
 - `position_peak_prices` (trailing stop, re-entry pullback calculation),
-  `reentry_fired` (re-entry once-per-episode gating), and (added
-  2026-08-06) `position_opened_at` (re-entry minimum-age gating) are
-  **persisted to disk** (`peak_prices_state.json`, `reentry_state.json`,
-  `position_opened_state.json`, all gitignored) — survive a service
-  restart. Peak prices/reentry-fired added 2026-07-14 after confirming
+  `reentry_fired` (re-entry once-per-episode gating), (added 2026-08-06)
+  `position_opened_at` (re-entry minimum-age gating), and (added
+  2026-08-17) `position_methods` (which of the two dual stock signal
+  sources — Bollinger or EMA9/21, see `STRATEGY.md` — opened a held
+  position, so it's checked against the right exit rule) are **persisted
+  to disk** (`peak_prices_state.json`, `reentry_state.json`,
+  `position_opened_state.json`, `position_method_state.json`, all
+  gitignored) — survive a service restart. `position_methods` is
+  load-bearing, not just convenience: without it, a restart would lose
+  track of which exit rule applies to an already-open position, a silent
+  correctness bug (wrong exit logic), not just a missed optimization. Peak prices/reentry-fired added 2026-07-14 after confirming
   restarts had become frequent enough (multiple deploys per day) that the
   old "the process rarely restarts" assumption no longer held, and a
   restart was silently re-seeding every peak to the current price,

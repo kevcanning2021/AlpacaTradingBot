@@ -97,18 +97,43 @@ class OpportunityScanner:
     BOLLINGER_STD = 2
     BOLLINGER_OVERSOLD_RSI = 40  # entry confirmation: RSI must also say oversold
 
+    # Dual stock signal sources, 2026-08-17: Bollinger and EMA9/21 run as two
+    # independent, already-separately-validated entry sources on the stock
+    # watchlist (not one replacing the other) -- Kevin wanted more real trade
+    # frequency; a grid search loosening Bollinger's own band/RSI strictness
+    # found every looser variant traded about the same or more but with worse
+    # (sometimes negative) expectancy, so the extra frequency couldn't come
+    # from relaxing one strategy's bar. Running both in parallel instead,
+    # sharing the same MAX_POSITIONS/capital cap (not more risk, more ways to
+    # find a real signal): backtested against the same 22 months, 90 trades
+    # (vs. 44 Bollinger-only / 50 EMA-only), +1.71%/trade (higher than either
+    # alone, not diluted between them), +35.89% total return (vs. +16.67% /
+    # +17.37%) -- more capital cycling through equally-good trades, not lower
+    # quality ones. Positive independently on train (+18.25%) and holdout
+    # (+15.70%), leave-one-symbol-out robust (+1.20% to +2.19% everywhere).
+    # Crypto is NOT part of this -- still single EMA9/21, same reasoning as
+    # the original Bollinger scoping (never backtested at crypto's volatility).
+    # A position's exit is governed by whichever method opened it (tracked in
+    # `trader.py: self.position_methods`, persisted like peak_prices/
+    # reentry_fired) -- a Bollinger entry exits on Bollinger's mid-band/
+    # overbought rule, an EMA entry exits on EMA's crossunder/overbought rule,
+    # never a mixed rule. See STRATEGY.md.
+
     def __init__(self, client):
         self.client = client
 
-    def _analyze_bars(self, symbol: str, bars: List[Dict]) -> Dict:
+    def _analyze_bars(self, symbol: str, bars: List[Dict], held_method: str = None) -> Dict:
         """Pure signal computation from already-fetched bars, kept separate from the
         batched fetch in scan() so signal logic and I/O don't get tangled together.
 
-        Stocks use Bollinger Band mean-reversion; crypto keeps the original
-        EMA9/21 crossover -- the Bollinger backtest (see BOLLINGER_* above) only
-        ever covered the stock watchlist, so crypto is deliberately left alone
-        rather than carrying an unvalidated change over to a very different
-        volatility regime.
+        Crypto always uses EMA9/21 (untouched, see class docstring above).
+
+        For a stock, `held_method` (None if not currently held) decides what gets
+        evaluated: a held position is only ever checked against the ONE method
+        that opened it (its own exit rule governs, not a mixed/either rule); a
+        symbol with no open position is checked against BOTH methods for a fresh
+        entry, taking whichever fires first (Bollinger preferred on same-day tie,
+        matching the backtest's tie-break and today's pre-dual default).
         """
         if len(bars) < 22:
             return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history', 'price': 0.0}
@@ -119,7 +144,22 @@ class OpportunityScanner:
 
         if '/' in symbol:
             return self._analyze_ema_crossover(symbol, closes, price, rsi)
-        return self._analyze_bollinger(symbol, closes, price, rsi)
+
+        if held_method == 'ema':
+            return self._analyze_ema_crossover(symbol, closes, price, rsi)
+        if held_method == 'bollinger':
+            return self._analyze_bollinger(symbol, closes, price, rsi)
+
+        # Not currently held: check both for a fresh entry.
+        bollinger_result = self._analyze_bollinger(symbol, closes, price, rsi)
+        if bollinger_result['signal'] == 'buy':
+            bollinger_result['method'] = 'bollinger'
+            return bollinger_result
+        ema_result = self._analyze_ema_crossover(symbol, closes, price, rsi)
+        if ema_result['signal'] == 'buy':
+            ema_result['method'] = 'ema'
+            return ema_result
+        return bollinger_result
 
     def _analyze_ema_crossover(self, symbol: str, closes: List[float], price: float, rsi: float) -> Dict:
         ema9 = _compute_ema(closes, 9)
@@ -185,11 +225,18 @@ class OpportunityScanner:
             'bb_upper': round(upper[-1], 4) if upper[-1] is not None else None,
         }
 
-    def scan(self, watchlist: List[str]) -> List[Dict]:
+    def scan(self, watchlist: List[str], held_methods: Dict[str, str] = None) -> List[Dict]:
         """Fetches all symbols' bars in as few batched API round trips as possible
         (one per asset class present in `watchlist`) instead of one call per symbol --
         same signals, same per-symbol error isolation, far fewer requests. Added
-        2026-08-04; see get_bars_multi() docstring for the batching/fallback behavior."""
+        2026-08-04; see get_bars_multi() docstring for the batching/fallback behavior.
+
+        `held_methods`: {symbol: 'bollinger'|'ema'} for currently-held stock
+        positions, so a held symbol is evaluated against the one method that
+        opened it rather than either/both -- see _analyze_bars. Symbols not in
+        this dict (or when it's None/empty) are treated as not currently held,
+        i.e. checked for a fresh entry against both methods."""
+        held_methods = held_methods or {}
         stock_symbols = [s for s in watchlist if '/' not in s]
         crypto_symbols = [s for s in watchlist if '/' in s]
 
@@ -202,8 +249,9 @@ class OpportunityScanner:
         results = []
         for symbol in watchlist:
             try:
-                result = self._analyze_bars(symbol, bars_by_symbol.get(symbol, []))
-                logger.info(f"[SCAN] {symbol}: {result['signal'].upper()} — {result['reason']}")
+                result = self._analyze_bars(symbol, bars_by_symbol.get(symbol, []), held_methods.get(symbol))
+                method_tag = f" [{result['method']}]" if 'method' in result else ''
+                logger.info(f"[SCAN] {symbol}: {result['signal'].upper()}{method_tag} — {result['reason']}")
                 results.append(result)
             except Exception as e:
                 logger.error(f"[SCAN] Error analyzing {symbol}: {e}")

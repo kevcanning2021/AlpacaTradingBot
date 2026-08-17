@@ -16,6 +16,7 @@ PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pea
 REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reentry_state.json')
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
 POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
+POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
 
 
 def _now() -> str:
@@ -45,6 +46,7 @@ class TradingManager:
         self.position_opened_at = self._load_position_opened_at()  # When each open position was first observed
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
         self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
+        self.position_methods = self._load_position_methods()  # Which signal source opened each held stock position
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
         self.loss_streak = 0             # Current losing streak
@@ -127,6 +129,29 @@ class TradingManager:
                 json.dump(self.trade_history, f)
         except OSError as e:
             logger.error(f"Failed to save trade history: {e}")
+
+    def _load_position_methods(self) -> Dict:
+        """Which of the two dual stock signal sources ('bollinger' or 'ema') opened
+        each currently-held position -- persisted for the same restart-safety reason
+        as the other state files, and because it's load-bearing for correctness, not
+        just convenience: scan_and_execute() must check a held position against the
+        exact method that opened it, or a position could be evaluated against the
+        wrong exit rule after a restart. Crypto positions are never in this dict --
+        crypto has only ever had the one EMA9/21 method, see scanner.py."""
+        if os.path.exists(POSITION_METHOD_FILE):
+            try:
+                with open(POSITION_METHOD_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load position-method state, starting fresh: {e}")
+        return {}
+
+    def _save_position_methods(self):
+        try:
+            with open(POSITION_METHOD_FILE, 'w') as f:
+                json.dump(self.position_methods, f)
+        except OSError as e:
+            logger.error(f"Failed to save position-method state: {e}")
 
     def check_positions(self, asset_class: Optional[str] = None) -> Dict:
         """Check all open positions and apply trading logic.
@@ -250,6 +275,8 @@ class TradingManager:
                     if symbol in self.reentry_fired:
                         self.reentry_fired.discard(symbol)
                         self._save_reentry_state()
+                    self.position_methods.pop(symbol, None)
+                    self._save_position_methods()
                     closed = True
                     action = {
                         'action': 'STOP_LOSS_TRIGGERED',
@@ -312,6 +339,8 @@ class TradingManager:
                 if symbol in self.reentry_fired:
                     self.reentry_fired.discard(symbol)
                     self._save_reentry_state()
+                self.position_methods.pop(symbol, None)
+                self._save_position_methods()
                 action = {
                     'action': 'TRAILING_STOP_TRIGGERED',
                     'symbol': symbol,
@@ -654,19 +683,23 @@ class TradingManager:
 
         Defaults to the stock watchlist/sizing; pass settings.CRYPTO_WATCHLIST etc.
         to run the same logic against crypto instead.
+
+        Stocks run dual signal sources as of 2026-08-17 (see scanner.py class
+        docstring) -- positions must be fetched before scanning so each held
+        stock can be checked against the specific method (`self.position_methods`)
+        that opened it, not either/both. Crypto is unaffected: it was never in
+        held_methods to begin with, so it always takes scanner.py's single-EMA
+        branch regardless.
         """
         watchlist = watchlist if watchlist is not None else settings.WATCHLIST
         position_size_usd = position_size_usd if position_size_usd is not None else settings.POSITION_SIZE_USD
         max_positions = max_positions if max_positions is not None else settings.MAX_POSITIONS
 
-        scanner = OpportunityScanner(self.client)
-        signals = scanner.scan(watchlist)
-
         try:
             all_positions = self.client.get_positions()
             account = self.client.get_account()
         except Exception as e:
-            return {'timestamp': _now(), 'error': str(e), 'signals': signals, 'executed': [], 'errors': [str(e)]}
+            return {'timestamp': _now(), 'error': str(e), 'signals': [], 'executed': [], 'errors': [str(e)]}
 
         # Crypto and stock orders/positions use different symbol formats (BTC/USD vs
         # BTCUSD) and should be capped independently, so scope everything below to the
@@ -676,6 +709,15 @@ class TradingManager:
         positions = [p for p in all_positions if p.get('asset_class') == asset_class]
 
         current_symbols = {p['symbol'] for p in positions}
+        # Stock positions are checked against whichever of the dual methods opened
+        # them (see scanner.py); crypto never has an entry here since it's single-
+        # method (position_methods.get() returning None naturally routes a crypto
+        # symbol through _analyze_bars' unconditional EMA branch instead).
+        held_methods = {s: self.position_methods[s] for s in current_symbols if s in self.position_methods}
+
+        scanner = OpportunityScanner(self.client)
+        signals = scanner.scan(watchlist, held_methods=held_methods)
+
         buying_power = float(account.get('buying_power', 0))
         executed = []
         errors = []
@@ -703,6 +745,9 @@ class TradingManager:
                                                        client_order_id=client_order_id)
                     qty = round(notional / price, 4)
                     buying_power -= notional
+                    if 'method' in sig:  # stocks only -- crypto's single-method EMA branch never sets this
+                        self.position_methods[pos_symbol] = sig['method']
+                        self._save_position_methods()
                     executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
                     logger.info(f"[SCANNER] BUY ~${notional:.2f} ({qty} sh) {symbol} @ ~${price:.2f} — {sig['reason']}")
                 except Exception as e:
@@ -724,6 +769,8 @@ class TradingManager:
                     if pos_symbol in self.reentry_fired:
                         self.reentry_fired.discard(pos_symbol)
                         self._save_reentry_state()
+                    self.position_methods.pop(pos_symbol, None)
+                    self._save_position_methods()
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")

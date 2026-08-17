@@ -43,6 +43,7 @@ from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_check_state.json')
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
 HEALTH_ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 BACKTEST_ALERT_COOLDOWN_SECONDS = 24 * 60 * 60
 BACKTEST_LOOKBACK_BARS = 300
@@ -58,6 +59,23 @@ def load_trade_history():
         except (json.JSONDecodeError, OSError):
             return []
     return []
+
+
+def load_position_methods():
+    """Read-only load of trader.py's position_method_state.json -- a separate
+    process (this one), so it never writes this file, only reads whatever the
+    live trading service last persisted. Used so the hourly signal-health check
+    below evaluates each held stock against the one method that actually opened
+    it, same as scan_and_execute() does live -- otherwise a Bollinger-opened
+    position could get flagged as a "stuck sell" off an EMA signal it was never
+    entered under, or vice versa."""
+    if os.path.exists(POSITION_METHOD_FILE):
+        try:
+            with open(POSITION_METHOD_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
 
 
 def _forward_test_stats(trade_history, asset_class):
@@ -89,7 +107,8 @@ def save_state(state):
 
 def check_signal_health(client, watchlist, state, held_symbols):
     scanner = OpportunityScanner(client)
-    results = scanner.scan(watchlist)
+    held_methods = {s: m for s, m in load_position_methods().items() if s in held_symbols}
+    results = scanner.scan(watchlist, held_methods=held_methods)
     issues = []
     stuck = state.setdefault('stuck_sell_counts', {})
     seen = set()
@@ -171,17 +190,26 @@ def _simulate_trades(bars, buy_rsi_max, sell_rsi_min):
     return trades
 
 
-def _simulate_trades_bollinger(bars, oversold_rsi, sell_rsi_min, period, num_std):
-    """Bollinger Band mean-reversion equivalent of _simulate_trades above, matching
-    OpportunityScanner._analyze_bollinger exactly (buy on a lower-band bounce with
-    RSI confirmation, sell on reversion to the middle band or overbought) — this is
-    the live stock signal source as of 2026-08-14. See STRATEGY.md and
-    scanner.py: OpportunityScanner.BOLLINGER_* for the backtest that justified it."""
+def _simulate_trades_dual(bars, oversold_rsi, sell_rsi_min, period, num_std, buy_rsi_max):
+    """Dual-strategy equivalent of _simulate_trades above, matching
+    OpportunityScanner._analyze_bars' stock branch exactly as of 2026-08-17:
+    Bollinger Band mean-reversion and EMA9/21 crossover run as two independent
+    entry sources on the same symbol -- whichever fires first (Bollinger
+    preferred on a same-day tie, matching scanner.py) opens the position, and
+    that same method's own exit rule governs it (never a mixed rule). Replaced
+    the single-Bollinger-only _simulate_trades_bollinger this superseded when
+    Kevin asked for more real trade frequency without diluting either edge --
+    see STRATEGY.md and scanner.py's class docstring for the backtest."""
     closes = [float(b['c']) for b in bars]
     mid, upper, lower = _compute_bollinger(closes, period, num_std)
+    ema9 = _compute_ema(closes, 9)
+    ema21 = _compute_ema(closes, 21)
+    ema_offset9 = len(closes) - len(ema9)
+    ema_offset21 = len(closes) - len(ema21)
     trades = []
     in_position = False
     entry_price = 0.0
+    method = None
 
     for i in range(period, len(closes)):
         if lower[i] is None or lower[i - 1] is None or mid[i] is None:
@@ -192,12 +220,25 @@ def _simulate_trades_bollinger(bars, oversold_rsi, sell_rsi_min, period, num_std
 
         if not in_position:
             if prev_price < lower[i - 1] and price > lower[i] and rsi < oversold_rsi:
-                in_position = True
-                entry_price = price
+                in_position, method, entry_price = True, 'bollinger', price
+                continue
+            i9, i21 = i - ema_offset9, i - ema_offset21
+            if i9 >= 1 and i21 >= 1:
+                prev_diff = ema9[i9 - 1] - ema21[i21 - 1]
+                curr_diff = ema9[i9] - ema21[i21]
+                if prev_diff < 0 and curr_diff > 0 and rsi < buy_rsi_max:
+                    in_position, method, entry_price = True, 'ema', price
         else:
-            if price >= mid[i] or rsi > sell_rsi_min:
+            if method == 'bollinger':
+                exit_signal = price >= mid[i] or rsi > sell_rsi_min
+            else:
+                i9, i21 = i - ema_offset9, i - ema_offset21
+                prev_diff = ema9[i9 - 1] - ema21[i21 - 1]
+                curr_diff = ema9[i9] - ema21[i21]
+                exit_signal = (prev_diff > 0 and curr_diff < 0) or rsi > sell_rsi_min
+            if exit_signal:
                 trades.append((price - entry_price) / entry_price)
-                in_position = False
+                in_position, method = False, None
 
     return trades
 
@@ -210,9 +251,9 @@ def _backtest_watchlist(client, watchlist):
         if '/' in symbol:
             per_symbol[symbol] = _simulate_trades(bars, OpportunityScanner.BUY_RSI_MAX, OpportunityScanner.SELL_RSI_MIN)
         else:
-            per_symbol[symbol] = _simulate_trades_bollinger(
+            per_symbol[symbol] = _simulate_trades_dual(
                 bars, OpportunityScanner.BOLLINGER_OVERSOLD_RSI, OpportunityScanner.SELL_RSI_MIN,
-                OpportunityScanner.BOLLINGER_PERIOD, OpportunityScanner.BOLLINGER_STD)
+                OpportunityScanner.BOLLINGER_PERIOD, OpportunityScanner.BOLLINGER_STD, OpportunityScanner.BUY_RSI_MAX)
 
     all_trades = [t for trades in per_symbol.values() for t in trades]
     if not all_trades:
