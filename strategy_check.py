@@ -199,7 +199,19 @@ def _simulate_trades_dual(bars, oversold_rsi, sell_rsi_min, period, num_std, buy
     that same method's own exit rule governs it (never a mixed rule). Replaced
     the single-Bollinger-only _simulate_trades_bollinger this superseded when
     Kevin asked for more real trade frequency without diluting either edge --
-    see STRATEGY.md and scanner.py's class docstring for the backtest."""
+    see STRATEGY.md and scanner.py's class docstring for the backtest.
+
+    Deliberately does NOT model the 2026-08-18 drought fallback
+    (BOLLINGER_STD_FALLBACK) -- that's a portfolio-level rule (triggers once
+    the whole 7-symbol watchlist has sat at zero open positions for N days),
+    but this function walks one symbol in isolation with no visibility into
+    the other six. Modeling it properly would need the full walk-forward
+    portfolio simulation this function was never built to be, for a rule
+    that already only has n=1 real backtested occurrence -- not worth the
+    complexity. This daily drift-check will therefore slightly underestimate
+    live expectancy on the rare day a fallback trade fires; a real forward-
+    test divergence from that alone would be a false alarm, worth remembering
+    if `forward_test_diverged` ever fires shortly after one."""
     closes = [float(b['c']) for b in bars]
     mid, upper, lower = _compute_bollinger(closes, period, num_std)
     ema9 = _compute_ema(closes, 9)

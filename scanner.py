@@ -119,10 +119,31 @@ class OpportunityScanner:
     # overbought rule, an EMA entry exits on EMA's crossunder/overbought rule,
     # never a mixed rule. See STRATEGY.md.
 
+    # Drought fallback, 2026-08-18: even dual, the account sits at zero open
+    # stock positions ~19% of trading days (11 stretches/22mo, avg 8.1 days,
+    # worst 34 days) -- inherent to two genuinely selective strategies, not a
+    # bug. Kevin wanted a cap on the worst stretches specifically. Tested
+    # loosening BOLLINGER_OVERSOLD_RSI during a drought first: fired ZERO
+    # extra trades in 22mo at RSI<55 -- during a real drought no band touch
+    # happens at all, so RSI was never the actual blocker. Narrowing the
+    # band instead (BOLLINGER_STD_FALLBACK) does trigger, rarely: exactly 1
+    # extra trade in 22mo (a real win, +3.07%), cut the worst drought from 34
+    # to 20 days. Only ever checked once DROUGHT_TRADING_DAYS have passed
+    # with zero stock positions open (`trader.py` tracks this) and still
+    # requires an actual lower-band touch-and-bounce with the normal RSI
+    # confirmation -- narrower band, not no band. **Honesty flag: this is
+    # validated on a single occurrence (n=1) since it's built to fire rarely
+    # by design** -- directional evidence, not the same confidence as
+    # everything else on this page. Does nothing for an ordinary few-day gap,
+    # only the genuine long tail.
+    BOLLINGER_STD_FALLBACK = 1.5
+    DROUGHT_TRADING_DAYS = 10  # trader.py approximates this in calendar days
+
     def __init__(self, client):
         self.client = client
 
-    def _analyze_bars(self, symbol: str, bars: List[Dict], held_method: str = None) -> Dict:
+    def _analyze_bars(self, symbol: str, bars: List[Dict], held_method: str = None,
+                       in_drought: bool = False) -> Dict:
         """Pure signal computation from already-fetched bars, kept separate from the
         batched fetch in scan() so signal logic and I/O don't get tangled together.
 
@@ -134,6 +155,12 @@ class OpportunityScanner:
         symbol with no open position is checked against BOTH methods for a fresh
         entry, taking whichever fires first (Bollinger preferred on same-day tie,
         matching the backtest's tie-break and today's pre-dual default).
+
+        `in_drought` (only meaningful when held_method is None -- a held position
+        never needs a fallback) enables the narrow-band drought fallback inside
+        _analyze_bollinger once DROUGHT_TRADING_DAYS have passed with zero stock
+        positions open; see BOLLINGER_STD_FALLBACK above for what it does and its
+        n=1 backtest caveat.
         """
         if len(bars) < 22:
             return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history', 'price': 0.0}
@@ -151,7 +178,7 @@ class OpportunityScanner:
             return self._analyze_bollinger(symbol, closes, price, rsi)
 
         # Not currently held: check both for a fresh entry.
-        bollinger_result = self._analyze_bollinger(symbol, closes, price, rsi)
+        bollinger_result = self._analyze_bollinger(symbol, closes, price, rsi, in_drought=in_drought)
         if bollinger_result['signal'] == 'buy':
             bollinger_result['method'] = 'bollinger'
             return bollinger_result
@@ -194,7 +221,20 @@ class OpportunityScanner:
             'ema21': round(ema21[-1], 4),
         }
 
-    def _analyze_bollinger(self, symbol: str, closes: List[float], price: float, rsi: float) -> Dict:
+    def _narrow_band_bounce(self, closes: List[float], price: float, rsi: float) -> bool:
+        """Drought-only fallback check: a lower-band touch-and-bounce using
+        BOLLINGER_STD_FALLBACK (narrower than the normal BOLLINGER_STD), same
+        RSI confirmation as the standard entry -- softer band, not no band, and
+        not a looser RSI (that was tried and fired zero extra trades in 22mo of
+        backtesting, see the class docstring's DROUGHT_TRADING_DAYS note)."""
+        _, _, lower = _compute_bollinger(closes, self.BOLLINGER_PERIOD, self.BOLLINGER_STD_FALLBACK)
+        if len(lower) < 2 or lower[-1] is None or lower[-2] is None:
+            return False
+        prev_price = closes[-2]
+        return prev_price < lower[-2] and price > lower[-1] and rsi < self.BOLLINGER_OVERSOLD_RSI
+
+    def _analyze_bollinger(self, symbol: str, closes: List[float], price: float, rsi: float,
+                            in_drought: bool = False) -> Dict:
         mid, upper, lower = _compute_bollinger(closes, self.BOLLINGER_PERIOD, self.BOLLINGER_STD)
 
         if len(lower) < 2 or lower[-1] is None or lower[-2] is None or mid[-1] is None:
@@ -206,6 +246,8 @@ class OpportunityScanner:
         # (oversold reversion), RSI confirms momentum has actually turned.
         if prev_price < lower[-2] and price > lower[-1] and rsi < self.BOLLINGER_OVERSOLD_RSI:
             signal, reason = 'buy', f'Bollinger lower-band bounce (RSI {rsi:.1f})'
+        elif in_drought and self._narrow_band_bounce(closes, price, rsi):
+            signal, reason = 'buy', f'Bollinger drought fallback: narrow-band bounce (RSI {rsi:.1f})'
         # Sell: reverted to the mean (target hit) or overbought -- same
         # SELL_RSI_MIN overbought exit as the EMA crossover branch.
         elif price >= mid[-1] or rsi > self.SELL_RSI_MIN:
@@ -225,7 +267,8 @@ class OpportunityScanner:
             'bb_upper': round(upper[-1], 4) if upper[-1] is not None else None,
         }
 
-    def scan(self, watchlist: List[str], held_methods: Dict[str, str] = None) -> List[Dict]:
+    def scan(self, watchlist: List[str], held_methods: Dict[str, str] = None,
+              in_drought: bool = False) -> List[Dict]:
         """Fetches all symbols' bars in as few batched API round trips as possible
         (one per asset class present in `watchlist`) instead of one call per symbol --
         same signals, same per-symbol error isolation, far fewer requests. Added
@@ -235,7 +278,14 @@ class OpportunityScanner:
         positions, so a held symbol is evaluated against the one method that
         opened it rather than either/both -- see _analyze_bars. Symbols not in
         this dict (or when it's None/empty) are treated as not currently held,
-        i.e. checked for a fresh entry against both methods."""
+        i.e. checked for a fresh entry against both methods.
+
+        `in_drought`: whether the stock watchlist has sat at zero open positions
+        for DROUGHT_TRADING_DAYS+ (see class docstring) -- enables the narrow-band
+        Bollinger fallback for symbols not currently held. Caller's responsibility
+        to compute (trader.py does, from persisted state); always pass False for
+        a crypto-only scan call, since the fallback was never validated for
+        crypto's volatility."""
         held_methods = held_methods or {}
         stock_symbols = [s for s in watchlist if '/' not in s]
         crypto_symbols = [s for s in watchlist if '/' in s]
@@ -249,7 +299,8 @@ class OpportunityScanner:
         results = []
         for symbol in watchlist:
             try:
-                result = self._analyze_bars(symbol, bars_by_symbol.get(symbol, []), held_methods.get(symbol))
+                result = self._analyze_bars(symbol, bars_by_symbol.get(symbol, []), held_methods.get(symbol),
+                                             in_drought=in_drought)
                 method_tag = f" [{result['method']}]" if 'method' in result else ''
                 logger.info(f"[SCAN] {symbol}: {result['signal'].upper()}{method_tag} — {result['reason']}")
                 results.append(result)

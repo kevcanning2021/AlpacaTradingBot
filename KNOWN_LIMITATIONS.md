@@ -107,6 +107,16 @@ worth avoiding overlap with market hours if doing a lot of local pulls).
   predates this feature (or after any state-file loss), this
   conservatively treats it as freshly opened rather than leaving it
   permanently blocked from ever re-entering.
+- **`zero_since`** (added 2026-08-18, `zero_since_state.json`, stock only):
+  the date the stock watchlist first hit zero open positions, or `None` if
+  one's currently open. Drives `scanner.py`'s drought fallback (narrower
+  Bollinger band once `DROUGHT_TRADING_DAYS`/`DROUGHT_CALENDAR_DAYS` have
+  passed flat) — persisted for the same restart-safety reason as the
+  others, low-stakes if lost (worst case, the drought clock resets and the
+  already-rare fallback takes a bit longer to become eligible again, not a
+  wrong-exit-rule class of bug). See `STRATEGY.md` "Drought fallback" for
+  what it does and why it's validated on only one real backtested
+  occurrence.
 - **`reentry_fired` can stay latched for as long as a position stays open
   with no new peak, which can outlive an unrelated code change.** It only
   clears when the position sets a fresh high above its currently-tracked

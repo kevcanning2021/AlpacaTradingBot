@@ -81,6 +81,7 @@ touch each other's positions.
 | `BOLLINGER_PERIOD` / `BOLLINGER_STD` | 20 / 2 (stock only) | `scanner.py` | 2026-08-14 |
 | `BOLLINGER_OVERSOLD_RSI` | 40 (stock only) | `scanner.py` | 2026-08-14 |
 | `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest (crypto EMA path); Bollinger doesn't need this much history (see below) |
+| `BOLLINGER_STD_FALLBACK` / `DROUGHT_TRADING_DAYS` | 1.5σ / 10 days (stock only) | `scanner.py` | 2026-08-18, n=1 — see drought fallback entry below |
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
 | Re-entry | 5% / 12.5% | `config/settings.py` | 2026-07-14 |
@@ -437,6 +438,61 @@ curve-fit the way a threshold grid can.
   closed stock trades so far (3 EMA9/21-era, 2 Bollinger) predate this and
   don't carry forward as evidence for or against the dual approach
   specifically.
+
+**Drought fallback added — narrow-band Bollinger bounce after 10+ flat
+trading days, 2026-08-18.** Even dual, the account sits at zero open stock
+positions ~19.3% of trading days (11 stretches/22mo, avg 8.1 days, worst 34
+days) — inherent to two genuinely selective strategies on a 7-symbol
+watchlist, not a bug (see the rolling-window analysis in the
+2026-08-14 entry above, which found the same shape of result for a single
+strategy). Kevin pushed on this directly ("no trades means no way of making
+anything") and asked for a cap on the worst stretches specifically, not
+just an explanation.
+- **Tried first, rejected**: loosening `BOLLINGER_OVERSOLD_RSI` (40→55)
+  once a drought hit 10 or 15 flat trading days. Fired **zero** extra
+  trades in 22 months at either threshold — during a real drought, no
+  lower-band touch happens at all, so RSI was never the actual blocker.
+  Not implemented.
+- **What works, barely**: narrowing the entry band itself
+  (`BOLLINGER_STD_FALLBACK` = 1.5σ vs. the normal 2.0σ) once
+  `DROUGHT_TRADING_DAYS` (10) have passed with zero stock positions open —
+  same RSI<40 confirmation as always, just an easier-to-reach band. Fires
+  **exactly once** in the full 22-month backtest (that one trade won,
+  +3.07%), cutting the single worst drought from 34 days to 20. Total
+  return ticks up marginally (+35.89%→ ~+35.3% range depending on exact
+  run) — one extra data point, not a meaningful shift.
+- **Honesty flag, explicit**: this is validated on **n=1**. It's designed
+  to fire rarely, which means 22 months of history structurally cannot
+  produce a real sample size for it — this is directional evidence, not
+  the same confidence level as the RSI thresholds, the stop-loss
+  percentages, or even the dual-strategy swap above. Implemented anyway at
+  Kevin's explicit request, with that caveat stated plainly rather than
+  oversold as "validated."
+- **Does nothing for an ordinary few-day gap** — only ever activates after
+  10+ consecutive flat trading days (`trader.py` approximates this as 14
+  calendar days, `DROUGHT_CALENDAR_DAYS`, to account for weekends). The
+  gap that prompted this conversation was a few days old, nowhere near the
+  trigger — this fallback is a tail-risk cap on the genuinely bad
+  stretches, not a fix for normal cadence.
+- **State**: `trader.py: self.zero_since` (persisted, `zero_since_state.json`)
+  tracks the date the stock watchlist first hit zero positions; reset to
+  `None` the moment any stock position opens. A fallback-opened position is
+  tagged `method='bollinger'` (it's still a Bollinger position, just via a
+  softer entry band) and exits on the **normal** 2.0σ mid-band/RSI>80 rule
+  — only the entry check is relaxed, never the exit.
+- **`strategy_check.py`'s daily re-backtest deliberately does NOT model
+  this** — it's a portfolio-level rule (needs to know all 7 symbols' open
+  position count at once) but `_simulate_trades_dual` walks one symbol in
+  isolation; modeling it properly needs a full walk-forward portfolio
+  simulation this function was never built to be, for a rule with n=1
+  real occurrence. Documented as a known, deliberate gap in that function's
+  docstring rather than silently inaccurate — expect the daily check to
+  slightly underestimate live expectancy on the rare day this fires.
+- **Verified against the actual deployed code path**: replayed the
+  walk-forward simulation through the real `_analyze_bars` with real
+  drought-day tracking — 79 trades (1 fallback, MSFT +3.07%, exact match to
+  the standalone validation), +1.82%/trade, confirming no implementation
+  bug.
 
 ## Automated monitoring: `strategy_check.py`
 

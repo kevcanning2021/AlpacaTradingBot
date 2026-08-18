@@ -17,6 +17,8 @@ REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'r
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
 POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
 POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
+ZERO_SINCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'zero_since_state.json')
+DROUGHT_CALENDAR_DAYS = 14  # approximates scanner.py's DROUGHT_TRADING_DAYS (10) accounting for weekends
 
 
 def _now() -> str:
@@ -47,6 +49,7 @@ class TradingManager:
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
         self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
         self.position_methods = self._load_position_methods()  # Which signal source opened each held stock position
+        self.zero_since = self._load_zero_since()  # ISO date the stock watchlist first hit zero open positions, or None
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
         self.loss_streak = 0             # Current losing streak
@@ -152,6 +155,28 @@ class TradingManager:
                 json.dump(self.position_methods, f)
         except OSError as e:
             logger.error(f"Failed to save position-method state: {e}")
+
+    def _load_zero_since(self) -> Optional[str]:
+        """ISO date the stock watchlist first observed zero open positions, or
+        None if a stock position is currently open -- drives scanner.py's drought
+        fallback (BOLLINGER_STD_FALLBACK). Persisted for the same restart-safety
+        reason as the other state files; without it, a restart during a real
+        drought would reset the count to zero and delay the fallback becoming
+        eligible again."""
+        if os.path.exists(ZERO_SINCE_FILE):
+            try:
+                with open(ZERO_SINCE_FILE) as f:
+                    return json.load(f).get('zero_since')
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load zero-since state, starting fresh: {e}")
+        return None
+
+    def _save_zero_since(self):
+        try:
+            with open(ZERO_SINCE_FILE, 'w') as f:
+                json.dump({'zero_since': self.zero_since}, f)
+        except OSError as e:
+            logger.error(f"Failed to save zero-since state: {e}")
 
     def check_positions(self, asset_class: Optional[str] = None) -> Dict:
         """Check all open positions and apply trading logic.
@@ -715,8 +740,25 @@ class TradingManager:
         # symbol through _analyze_bars' unconditional EMA branch instead).
         held_methods = {s: self.position_methods[s] for s in current_symbols if s in self.position_methods}
 
+        # Drought fallback tracking (stock only -- never validated for crypto's
+        # volatility, see scanner.py class docstring). A position closing to zero
+        # starts the clock; any position open resets it. Calendar days, not
+        # trading days -- an approximation of scanner.py's DROUGHT_TRADING_DAYS,
+        # see DROUGHT_CALENDAR_DAYS above.
+        in_drought = False
+        if not is_crypto:
+            if not current_symbols:
+                if self.zero_since is None:
+                    self.zero_since = datetime.now(timezone.utc).date().isoformat()
+                    self._save_zero_since()
+                days_flat = (datetime.now(timezone.utc).date() - datetime.fromisoformat(self.zero_since).date()).days
+                in_drought = days_flat >= DROUGHT_CALENDAR_DAYS
+            elif self.zero_since is not None:
+                self.zero_since = None
+                self._save_zero_since()
+
         scanner = OpportunityScanner(self.client)
-        signals = scanner.scan(watchlist, held_methods=held_methods)
+        signals = scanner.scan(watchlist, held_methods=held_methods, in_drought=in_drought)
 
         buying_power = float(account.get('buying_power', 0))
         executed = []
