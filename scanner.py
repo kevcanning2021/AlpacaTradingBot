@@ -81,8 +81,8 @@ class OpportunityScanner:
     SIGNAL_BAR_WINDOW = 90
 
     # Bollinger Band(20, 2) mean-reversion -- stock signal source as of 2026-08-14,
-    # replacing the EMA9/21 crossover above (crypto keeps EMA9/21, see
-    # _analyze_bars). Backtested against 22 months of real daily bars (full
+    # replacing the EMA9/21 crossover above for stocks (crypto is separate, see
+    # DONCHIAN_BREAKOUT_PERIOD below and _analyze_bars). Backtested against 22 months of real daily bars (full
     # walk-forward: entries, 5%/8% stops, reentry, $10/4-max/$50 test-account
     # sizing) after Kevin flagged that a "flat month" felt like the strategy not
     # working: EMA9/21 baseline's total return over that window is basically a
@@ -111,8 +111,10 @@ class OpportunityScanner:
     # +17.37%) -- more capital cycling through equally-good trades, not lower
     # quality ones. Positive independently on train (+18.25%) and holdout
     # (+15.70%), leave-one-symbol-out robust (+1.20% to +2.19% everywhere).
-    # Crypto is NOT part of this -- still single EMA9/21, same reasoning as
-    # the original Bollinger scoping (never backtested at crypto's volatility).
+    # Crypto is NOT part of this dual setup -- always single-method (Donchian
+    # breakout as of 2026-08-24, see DONCHIAN_BREAKOUT_PERIOD below), same
+    # reasoning as the original Bollinger scoping (crypto's volatility regime
+    # is different enough to need its own independent validation).
     # A position's exit is governed by whichever method opened it (tracked in
     # `trader.py: self.position_methods`, persisted like peak_prices/
     # reentry_fired) -- a Bollinger entry exits on Bollinger's mid-band/
@@ -139,6 +141,27 @@ class OpportunityScanner:
     BOLLINGER_STD_FALLBACK = 1.5
     DROUGHT_TRADING_DAYS = 10  # trader.py approximates this in calendar days
 
+    # Crypto signal source, replaced 2026-08-24: the original EMA9/21 crossover
+    # (inherited from the stock strategy, never independently backtested for
+    # crypto per STRATEGY.md) had been live for weeks with zero filled trades.
+    # Backtested three real candidates against 3.6 years of real BTC/USD and
+    # ETH/USD daily bars (full walk-forward + train/holdout + rolling-window +
+    # recent-9-month checks, same rigor as the stock Bollinger validation):
+    # plain Bollinger mean-reversion was badly negative recently on both
+    # symbols (-34.56%/-50.88% over the last 9 months, repeatedly stopped out
+    # buying dips in a real decline); a trend-filtered Bollinger variant fired
+    # too rarely to trust (3-7 trades total); this Donchian breakout is the
+    # only candidate positive on the full window, the train half, AND the
+    # holdout half, independently for BOTH symbols -- the same "positive on
+    # both halves" bar that qualified stock Bollinger for deployment. Its
+    # rolling-window profile (51-58% of 90-day windows flat or negative) is
+    # the normal signature of trend-following, not a red flag: a low win rate
+    # (~40%) carried by a few large trending moves, not many small wins --
+    # flagged explicitly to Kevin before deploying since it means real losing
+    # stretches are expected, not a sign it's broken.
+    DONCHIAN_BREAKOUT_PERIOD = 20  # buy: today's close is a new N-day high
+    DONCHIAN_EXIT_PERIOD = 10      # sell: today's close is a new N-day low
+
     def __init__(self, client):
         self.client = client
 
@@ -147,7 +170,8 @@ class OpportunityScanner:
         """Pure signal computation from already-fetched bars, kept separate from the
         batched fetch in scan() so signal logic and I/O don't get tangled together.
 
-        Crypto always uses EMA9/21 (untouched, see class docstring above).
+        Crypto always uses Donchian breakout (see class docstring above for
+        the 2026-08-24 replacement of the original untested EMA9/21).
 
         For a stock, `held_method` (None if not currently held) decides what gets
         evaluated: a held position is only ever checked against the ONE method
@@ -170,7 +194,7 @@ class OpportunityScanner:
         rsi = _compute_rsi(closes)
 
         if '/' in symbol:
-            return self._analyze_ema_crossover(symbol, closes, price, rsi)
+            return self._analyze_donchian_breakout(symbol, closes, price, rsi)
 
         if held_method == 'ema':
             return self._analyze_ema_crossover(symbol, closes, price, rsi)
@@ -219,6 +243,43 @@ class OpportunityScanner:
             'rsi': round(rsi, 2),
             'ema9': round(ema9[-1], 4),
             'ema21': round(ema21[-1], 4),
+        }
+
+    def _analyze_donchian_breakout(self, symbol: str, closes: List[float], price: float, rsi: float) -> Dict:
+        """Buy: today's close is a new DONCHIAN_BREAKOUT_PERIOD-day high (momentum
+        continuation). Sell: today's close is a new DONCHIAN_EXIT_PERIOD-day low
+        (asymmetric channel -- exits faster than it enters, same shape as the
+        backtest). RSI is carried through for parity with the other analyzers'
+        return shape but isn't part of this signal -- the backtest that validated
+        this (see class docstring) never used an RSI filter for it, only the
+        stop-loss/trailing-stop overlay already applied in trader.py.
+
+        Close-based (not high/low-based) specifically to match what was
+        backtested exactly -- a live/backtest mismatch here would repeat the
+        same class of bug already caught once today (PDT15Rev's Candle-1
+        wrong-day bug): whatever gets validated is what should run live,
+        not a hand-varied "more standard" version of it.
+        """
+        period, exit_period = self.DONCHIAN_BREAKOUT_PERIOD, self.DONCHIAN_EXIT_PERIOD
+        if len(closes) < period + 1:
+            return {'symbol': symbol, 'signal': 'hold', 'reason': 'insufficient history for Donchian',
+                    'price': price, 'rsi': rsi}
+
+        recent_high = max(closes[-(period + 1):-1])
+        if price >= recent_high:
+            signal, reason = 'buy', f'Donchian {period}-day breakout (RSI {rsi:.1f})'
+        elif len(closes) >= exit_period + 1 and price <= min(closes[-(exit_period + 1):-1]):
+            signal, reason = 'sell', f'Donchian {exit_period}-day breakdown (RSI {rsi:.1f})'
+        else:
+            signal, reason = 'hold', f'No breakout signal (RSI {rsi:.1f})'
+
+        return {
+            'symbol': symbol,
+            'signal': signal,
+            'reason': reason,
+            'price': price,
+            'rsi': round(rsi, 2),
+            'donchian_high': round(recent_high, 4),
         }
 
     def _narrow_band_bounce(self, closes: List[float], price: float, rsi: float) -> bool:

@@ -32,12 +32,82 @@ without this, a Bollinger-opened position could get evaluated against
 EMA's exit rule (or vice versa) after a restart, which would be a silent
 correctness bug, not just a missed optimization.
 
-**Crypto: unchanged, EMA9/21 crossover only** (`scanner.py:
-OpportunityScanner._analyze_ema_crossover`), same entry/exit rule as the
-EMA branch above. Never part of the dual setup — the backtest behind it
-only ever covered the stock watchlist, so crypto deliberately kept its
-single original method rather than carrying an unvalidated change into a
-very different volatility regime.
+**Crypto (since 2026-08-24): Donchian breakout** (`scanner.py:
+OpportunityScanner._analyze_donchian_breakout`), replacing the original
+EMA9/21 crossover. **Entry**: today's close is a new `DONCHIAN_BREAKOUT_PERIOD`
+(20)-day high. **Exit**: today's close is a new `DONCHIAN_EXIT_PERIOD`
+(10)-day low, or the existing `CRYPTO_STOP_LOSS_THRESHOLD`/
+`CRYPTO_TRAILING_STOP_THRESHOLD` overlay in `trader.py` fires first (unchanged
+by this swap). Never part of the stock dual setup — crypto keeps its own
+single method, same reasoning as before (different enough volatility regime
+to need independent validation, not a change carried over unvalidated).
+
+**Why the swap**: the original EMA9/21 crossover was inherited from the
+stock strategy and never actually backtested for crypto specifically — its
+RSI thresholds were only "not contradicted" by a 9-trade grid search, and
+it had been live 24/7 for weeks with zero filled trades. Backtested three
+real candidates against 3.6 years of real BTC/USD and ETH/USD daily bars
+(full walk-forward: entries + the real `CRYPTO_STOP_LOSS_THRESHOLD`/
+`CRYPTO_TRAILING_STOP_THRESHOLD` overlay, train/holdout split,
+leave-one-symbol-out via each symbol independently, rolling-90-day-window
+distribution, and a recent-9-month check):
+- **Plain Bollinger(20,2) mean-reversion** (the stock winner, tried first
+  since it worked so well there): badly negative recently on both symbols
+  (BTC -34.56%, ETH -50.88% over the last 270 days, several stopped out) —
+  kept buying dips into a real, sustained decline. Full-window and
+  train/holdout were also inconsistent (train strongly positive, holdout
+  negative on both symbols) — the same "wins only where it wasn't
+  selected" pattern this project already treats as disqualifying.
+- **Trend-filtered Bollinger** (dip-buy gated on price above a 100-day SMA,
+  to directly target the above failure mode): fired far too rarely to
+  trust (3-7 trades total over 3.6 years per symbol) — rejected on sample
+  size alone, independent of the direction of the (also inconsistent)
+  results.
+- **Donchian(20,10) breakout — selected.** The only candidate positive on
+  the full window, the train half, AND the holdout half, independently for
+  BOTH symbols (BTC: full +5.41%/trade, train +7.29%/trade, holdout
+  +2.07%/trade; ETH: full +0.89%/trade, train +0.82%/trade, holdout
+  +0.99%/trade) — the same "positive on both halves, both symbols" bar
+  that qualified stock Bollinger for deployment.
+
+**Known, deliberate tradeoff — read before treating a quiet/red stretch as
+a bug**: this is a trend-following signal, not mean-reversion. Rolling
+90-day-window analysis shows 51% (BTC) / 58% (ETH) of all windows are flat
+or negative — the positive overall expectancy is carried by a minority of
+windows that catch a real trend (best observed: BTC +47%, ETH +42%), not
+steady small wins. Win rate is ~40-41% at the trade level. Recent 9-month
+performance was mildly negative on a small sample (4 trades each,
+BTC -4.62%, ETH -12.14% total) at the time of this backtest — expected
+variance for this strategy shape, not necessarily a sign it's already
+broken, but worth watching rather than assuming either way. This was
+explicitly flagged to Kevin before deployment given his stated preference
+for visible trading activity: a strategy like this will likely produce
+*more* quiet-or-red stretches than the old EMA9/21 did, not fewer, in
+exchange for a real (if infrequent) statistical edge instead of an
+unvalidated one.
+
+**Live/backtest parity, verified not assumed**: `scanner.py:
+OpportunityScanner._analyze_donchian_breakout` was cross-checked
+signal-by-signal against the standalone backtest across all 1,311 usable
+bars on both symbols — zero mismatches — before deployment, specifically
+because a live/backtest divergence in a newly-swapped strategy is exactly
+the class of bug already caught once the same day elsewhere (PDT15Rev's
+Candle-1 wrong-day bug). `strategy_check.py`'s daily re-backtest
+(`_simulate_trades_donchian`) was updated in lockstep so the automated
+drift-check validates against the strategy actually running, not the
+retired EMA9/21 (the exact stale-reimplementation gap Lesson #22 already
+warns about). `telegram_bot.py`'s `/backtest` header updated to match;
+`/optimize` (an RSI-threshold grid search) retired entirely — neither
+current live strategy (stock dual, crypto Donchian) is a single RSI
+threshold pair anymore, so the tool no longer maps onto anything deployed.
+
+**Deployment note**: pushed to `master`, but only pulled onto
+`/opt/alpaca-bot-test` (test account) at rollout — production
+(`/opt/alpaca-bot`, ~$100k paper equity) deliberately left on the prior
+commit until this has a real live track record, same discipline already
+used for the stock Bollinger→dual rollout (see KNOWN_LIMITATIONS.md).
+**Not yet observed live** — this is a backtest-driven decision, not yet
+forward-tested against real fills.
 
 `_analyze_bars` routes by `'/' in symbol` for crypto vs. stock, then by
 `held_method` for which of the two stock methods applies to an already-open

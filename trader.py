@@ -140,7 +140,8 @@ class TradingManager:
         just convenience: scan_and_execute() must check a held position against the
         exact method that opened it, or a position could be evaluated against the
         wrong exit rule after a restart. Crypto positions are never in this dict --
-        crypto has only ever had the one EMA9/21 method, see scanner.py."""
+        crypto has only ever had a single method (EMA9/21 until 2026-08-24,
+        Donchian breakout since -- never dual), see scanner.py."""
         if os.path.exists(POSITION_METHOD_FILE):
             try:
                 with open(POSITION_METHOD_FILE) as f:

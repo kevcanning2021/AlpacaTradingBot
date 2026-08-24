@@ -16,13 +16,19 @@ thresholds) with the same cooldown/state pattern as watchdog.py:
   data outage (too few bars / scanner error) or a SELL signal that's
   persisted for 2+ consecutive hourly checks on a symbol still held
   (the scheduler should have closed it well before then).
-- Once/day, after market close: re-backtest BUY_RSI_MAX/SELL_RSI_MIN
-  (read live from scanner.py, so this never drifts from what's actually
-  deployed) against a fresh 300-bar window per symbol, using the same
-  continuous-EMA methodology as every backtest in STRATEGY.md. Flags if
-  aggregate expectancy has gone negative, if it's become outlier-driven
-  (a leave-one-symbol-out flips sign — see project Lesson #10), or if
-  it's dropped more than half since the last recorded run.
+- Once/day, after market close: re-backtest each watchlist's live thresholds
+  (read from scanner.py, so this never drifts from what's actually deployed)
+  against a fresh 300-bar window per symbol — Bollinger+EMA9/21 dual for
+  stocks, Donchian breakout (as of 2026-08-24, see scanner.py's
+  DONCHIAN_BREAKOUT_PERIOD docstring) for crypto. Flags if aggregate
+  expectancy has gone negative, if it's become outlier-driven (a
+  leave-one-symbol-out flips sign — see project Lesson #10), or if it's
+  dropped more than half since the last recorded run. Note for crypto
+  specifically: a negative-expectancy flag here on a 300-bar/~10-month
+  window is expected some of the time by design (trend-following has a
+  ~40% win rate and most short windows are flat-to-negative, carried by
+  rare large trending moves) — not automatically a sign something broke,
+  see scanner.py for the full reasoning before treating it as an incident.
 - Same daily run, once >= FORWARD_TEST_MIN_TRADES real closed trades
   exist (trader.py persists every closed trade's realized P&L to
   trade_history.json — see its _record_trade_outcome): compares the
@@ -144,55 +150,9 @@ def check_signal_health(client, watchlist, state, held_symbols):
     return issues
 
 
-def _simulate_trades(bars, buy_rsi_max, sell_rsi_min):
-    """Walks one continuous EMA9/EMA21 series over the whole fetched window and
-    simulates buy/sell day-by-day — the same methodology used for every backtest
-    recorded in STRATEGY.md (confirmed by reproducing the documented 65/80 result:
-    not outlier-driven, +0.5%-+1.9%/trade leave-one-symbol-out).
-
-    This now closely matches live per-check behavior too: OpportunityScanner._analyze
-    fetches SIGNAL_BAR_WINDOW (90) bars and recomputes EMA9/21 from that window each
-    check — originally 35 bars, which left EMA21 undercooked and gave a measurably
-    weaker, outlier-driven result versus this continuous methodology (a real gap,
-    found and fixed 2026-07-16 by raising the window to 90, the point where the two
-    methodologies converge to identical results). See STRATEGY.md "Automated
-    monitoring" for the investigation and convergence data."""
-    closes = [float(b['c']) for b in bars]
-    ema9 = _compute_ema(closes, 9)
-    ema21 = _compute_ema(closes, 21)
-    if len(ema9) < 2 or len(ema21) < 2:
-        return []
-
-    offset9 = len(closes) - len(ema9)
-    offset21 = len(closes) - len(ema21)
-    trades = []
-    in_position = False
-    entry_price = 0.0
-
-    for i in range(max(offset9, offset21) + 1, len(closes)):
-        i9 = i - offset9
-        i21 = i - offset21
-        prev_diff = ema9[i9 - 1] - ema21[i21 - 1]
-        curr_diff = ema9[i9] - ema21[i21]
-        rsi = _compute_rsi(closes[max(0, i - 40):i + 1])
-        price = closes[i]
-
-        if not in_position:
-            if prev_diff < 0 and curr_diff > 0 and rsi < buy_rsi_max:
-                in_position = True
-                entry_price = price
-        else:
-            crossunder = prev_diff > 0 and curr_diff < 0
-            if crossunder or rsi > sell_rsi_min:
-                trades.append((price - entry_price) / entry_price)
-                in_position = False
-
-    return trades
-
-
 def _simulate_trades_dual(bars, oversold_rsi, sell_rsi_min, period, num_std, buy_rsi_max):
-    """Dual-strategy equivalent of _simulate_trades above, matching
-    OpportunityScanner._analyze_bars' stock branch exactly as of 2026-08-17:
+    """Stock re-backtest, matching OpportunityScanner._analyze_bars' stock
+    branch exactly as of 2026-08-17:
     Bollinger Band mean-reversion and EMA9/21 crossover run as two independent
     entry sources on the same symbol -- whichever fires first (Bollinger
     preferred on a same-day tie, matching scanner.py) opens the position, and
@@ -255,13 +215,52 @@ def _simulate_trades_dual(bars, oversold_rsi, sell_rsi_min, period, num_std, buy
     return trades
 
 
+def _simulate_trades_donchian(bars, breakout_period, exit_period, stop_loss_pct, trailing_stop_pct):
+    """Crypto's re-backtest, updated 2026-08-24 alongside the live scanner swap
+    from EMA9/21 to Donchian breakout -- without this, the daily drift-check
+    would keep validating live crypto results against a strategy that's no
+    longer running, exactly the stale-reimplementation gap already documented
+    for the stock side (project Lesson #22). Includes the stop-loss/trailing-
+    stop overlay (unlike _simulate_trades_dual above, which only models the
+    raw signal exit) since Donchian's validation explicitly
+    relied on that overlay -- see scanner.py's DONCHIAN_BREAKOUT_PERIOD
+    docstring for the full backtest this reproduces."""
+    closes = [float(b['c']) for b in bars]
+    trades = []
+    in_position = False
+    entry_price = peak_price = 0.0
+
+    for i in range(breakout_period + 1, len(closes)):
+        price = closes[i]
+        if not in_position:
+            recent_high = max(closes[i - breakout_period:i])
+            if price >= recent_high:
+                in_position, entry_price, peak_price = True, price, price
+        else:
+            peak_price = max(peak_price, price)
+            exit_price = None
+            if stop_loss_pct and price <= entry_price * (1 - stop_loss_pct):
+                exit_price = price
+            elif trailing_stop_pct and price <= peak_price * (1 - trailing_stop_pct):
+                exit_price = price
+            elif i >= exit_period + 1 and price <= min(closes[i - exit_period:i]):
+                exit_price = price
+            if exit_price is not None:
+                trades.append((exit_price - entry_price) / entry_price)
+                in_position = False
+
+    return trades
+
+
 def _backtest_watchlist(client, watchlist):
     bars_by_symbol = client.get_bars_multi(watchlist, limit=BACKTEST_LOOKBACK_BARS)
     per_symbol = {}
     for symbol in watchlist:
         bars = bars_by_symbol.get(symbol, [])
         if '/' in symbol:
-            per_symbol[symbol] = _simulate_trades(bars, OpportunityScanner.BUY_RSI_MAX, OpportunityScanner.SELL_RSI_MIN)
+            per_symbol[symbol] = _simulate_trades_donchian(
+                bars, OpportunityScanner.DONCHIAN_BREAKOUT_PERIOD, OpportunityScanner.DONCHIAN_EXIT_PERIOD,
+                settings.CRYPTO_STOP_LOSS_THRESHOLD, settings.CRYPTO_TRAILING_STOP_THRESHOLD)
         else:
             per_symbol[symbol] = _simulate_trades_dual(
                 bars, OpportunityScanner.BOLLINGER_OVERSOLD_RSI, OpportunityScanner.SELL_RSI_MIN,

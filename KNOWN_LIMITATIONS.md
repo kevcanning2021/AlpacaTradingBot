@@ -19,10 +19,13 @@ state.
 account's stock scanner uses Bollinger Band mean-reversion while
 production's stays on the original EMA9/21 crossover — a deliberate,
 temporary divergence pending the milestone-gated real-money decision
-(see `STRATEGY.md`), not a deployment gap to close. Check `git log -1`
-on each `/opt/alpaca-bot*` clone before assuming they're in sync; the
-"same code, different account size" description above is the normal
-state, not a guarantee that always holds.
+(see `STRATEGY.md`), not a deployment gap to close. As of 2026-08-24, the
+same pattern now applies to crypto too: the test account's crypto scanner
+uses Donchian breakout while production stays on the original (never
+independently backtested) EMA9/21 crossover, pending the same real-money
+gate. Check `git log -1` on each `/opt/alpaca-bot*` clone before assuming
+they're in sync; the "same code, different account size" description
+above is the normal state, not a guarantee that always holds.
 
 A third service, `alpaca-dashboard.service`, is a read-only monitoring PWA
 (separate branch, not yet merged to `master`).

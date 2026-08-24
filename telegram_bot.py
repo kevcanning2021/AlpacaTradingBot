@@ -22,7 +22,7 @@ import urllib.error
 from alpaca_client import AlpacaClient
 from config import settings
 from scanner import OpportunityScanner
-from strategy_check import _backtest_watchlist, _simulate_trades
+from strategy_check import _backtest_watchlist
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,10 +30,6 @@ logger = logging.getLogger(__name__)
 API_BASE = f'https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}'
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
 POLL_TIMEOUT_SECONDS = 30  # Telegram long-polls: holds the request open until a message arrives or this elapses
-OPTIMIZE_LOOKBACK_BARS = 600  # split in half: older = training, newer = untouched holdout
-OPTIMIZE_BUY_GRID = [55, 60, 65, 70]
-OPTIMIZE_SELL_GRID = [70, 75, 80, 85, 90]
-OPTIMIZE_MIN_TRAIN_TRADES = 5  # grid cells below this are too thin to trust, skipped
 
 # Single source of truth for both the /help text and Telegram's native command
 # menu (set_bot_commands below) -- BOT_COMMANDS is a list of (name, description)
@@ -162,17 +158,19 @@ def format_history() -> str:
 
 def run_backtest(client: AlpacaClient) -> str:
     """Re-runs the exact same backtest strategy_check.py already does once/day
-    (BUY_RSI_MAX/SELL_RSI_MIN, current live thresholds, continuous-EMA methodology
-    -- see strategy_check.py's module docstring), on demand instead of waiting for
-    the daily cron. Read-only: this is analysis only, never touches live thresholds
-    or places any order. Not a systematic/multi-candidate search -- see STRATEGY.md
-    "Rejected hypotheses" for why that kind of test needs careful out-of-sample
-    review, not a one-tap command."""
+    (current live thresholds/strategy per watchlist, read from scanner.py so
+    this never drifts -- see strategy_check.py's module docstring), on demand
+    instead of waiting for the daily cron. Read-only: this is analysis only,
+    never touches live thresholds or places any order. Not a systematic/
+    multi-candidate search -- see STRATEGY.md "Rejected hypotheses" for why
+    that kind of test needs careful out-of-sample review, not a one-tap
+    command."""
     lines = [
         f"Stock: Bollinger({OpportunityScanner.BOLLINGER_PERIOD},{OpportunityScanner.BOLLINGER_STD}) "
         f"oversold RSI<{OpportunityScanner.BOLLINGER_OVERSOLD_RSI} + EMA9/21 crossover "
         f"BUY_RSI_MAX={OpportunityScanner.BUY_RSI_MAX} (dual, either fires), SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}",
-        f"Crypto: EMA9/21 only, BUY_RSI_MAX={OpportunityScanner.BUY_RSI_MAX}, SELL_RSI_MIN={OpportunityScanner.SELL_RSI_MIN}",
+        f"Crypto: Donchian breakout({OpportunityScanner.DONCHIAN_BREAKOUT_PERIOD}/"
+        f"{OpportunityScanner.DONCHIAN_EXIT_PERIOD})",
         '',
     ]
     for label, watchlist in (('Stock', settings.WATCHLIST), ('Crypto', settings.CRYPTO_WATCHLIST)):
@@ -190,85 +188,25 @@ def run_backtest(client: AlpacaClient) -> str:
 
 
 def run_optimize(client: AlpacaClient) -> str:
-    """Grid-searches BUY_RSI_MAX x SELL_RSI_MIN with a genuine out-of-sample split
-    baked in -- fetches OPTIMIZE_LOOKBACK_BARS (600) bars per symbol, trains the
-    grid search on the OLDER half only, then evaluates both the current live
-    thresholds and whatever looked best in training against the NEWER half, which
-    the search never saw. This is exactly the check that caught the 2026-07-23
-    systematic-screen overfitting mistake (see STRATEGY.md "Rejected hypotheses") --
-    baked into the tool itself instead of relying on someone remembering to build
-    it by hand each time. Read-only: reports only, never changes a live threshold."""
-    lines = []
-    for label, watchlist in (('Stock', settings.WATCHLIST), ('Crypto', settings.CRYPTO_WATCHLIST)):
-        if not watchlist:
-            continue
-        if label == 'Stock':
-            # This grid searches BUY_RSI_MAX x SELL_RSI_MIN against a single EMA9/21
-            # crossover -- stocks run a dual strategy since 2026-08-17 (Bollinger
-            # mean-reversion + EMA9/21, either can open a position, see scanner.py:
-            # OpportunityScanner class docstring), so a single-parameter RSI grid
-            # doesn't map onto what's actually deployed. Skipping rather than
-            # reporting a misleading number; a dual-strategy optimizer would need
-            # its own dedicated grid, not a quick reuse of this one.
-            lines.append('Stock: skipped -- /optimize grid-searches BUY_RSI_MAX/SELL_RSI_MIN for a single '
-                          'EMA9/21 strategy, which stocks no longer run alone (dual Bollinger+EMA9/21 since '
-                          '2026-08-17). Use /backtest for the current stock strategy\'s live numbers.')
-            continue
-        bars_by_symbol = client.get_bars_multi(watchlist, limit=OPTIMIZE_LOOKBACK_BARS)
-        older = {s: b[:len(b) // 2] for s, b in bars_by_symbol.items()}
-        newer = {s: b[len(b) // 2:] for s, b in bars_by_symbol.items()}
-
-        best = None
-        for buy in OPTIMIZE_BUY_GRID:
-            for sell in OPTIMIZE_SELL_GRID:
-                trades = [t for bars in older.values() for t in _simulate_trades(bars, buy, sell)]
-                if len(trades) < OPTIMIZE_MIN_TRAIN_TRADES:
-                    continue
-                exp = (sum(trades) / len(trades)) * 100
-                if best is None or exp > best['train_exp']:
-                    best = {'buy': buy, 'sell': sell, 'train_trades': len(trades), 'train_exp': exp}
-
-        def holdout_expectancy(buy, sell):
-            trades = [t for bars in newer.values() for t in _simulate_trades(bars, buy, sell)]
-            return (sum(trades) / len(trades) * 100, len(trades)) if trades else (None, 0)
-
-        live_buy, live_sell = OpportunityScanner.BUY_RSI_MAX, OpportunityScanner.SELL_RSI_MIN
-        live_exp, live_n = holdout_expectancy(live_buy, live_sell)
-        lines.append(f"{label} (holdout = newer half, never used for the search below):")
-        lines.append(
-            f"  Current live {live_buy}/{live_sell}: {live_exp:+.3f}%/trade ({live_n} trades)"
-            if live_exp is not None else f"  Current live {live_buy}/{live_sell}: no holdout trades"
-        )
-
-        if best is None:
-            lines.append("  No training-window combo had enough trades to trust.")
-            continue
-        best_exp, best_n = holdout_expectancy(best['buy'], best['sell'])
-        if best['buy'] == live_buy and best['sell'] == live_sell:
-            lines.append("  (Best in training was the same as current live -- nothing new to compare.)")
-        elif best_exp is None or best_n < OPTIMIZE_MIN_TRAIN_TRADES:
-            # Too few holdout trades to trust a "held up" claim -- the exact same
-            # false-confidence risk this whole split exists to catch, just one
-            # step later (thin holdout instead of thin training). Say so plainly
-            # rather than reporting a number that looks meaningful but isn't.
-            lines.append(
-                f"  Best in training {best['buy']}/{best['sell']} ({best['train_exp']:+.3f}%/trade, "
-                f"{best['train_trades']} trades): only {best_n} holdout trade(s) -- too thin to trust either way"
-            )
-        elif live_exp is not None and best_exp <= live_exp:
-            lines.append(
-                f"  Best in training {best['buy']}/{best['sell']} ({best['train_exp']:+.3f}%/trade in training) "
-                f"-> {best_exp:+.3f}%/trade on holdout ({best_n} trades) -- NOT better out-of-sample, keep current"
-            )
-        else:
-            lines.append(
-                f"  Best in training {best['buy']}/{best['sell']} ({best['train_exp']:+.3f}%/trade in training) "
-                f"-> {best_exp:+.3f}%/trade on holdout ({best_n} trades) -- held up out-of-sample, worth a closer look"
-            )
-
-    lines.append('')
-    lines.append('Analysis only -- no thresholds changed.')
-    return '\n'.join(lines)
+    """Formerly grid-searched BUY_RSI_MAX x SELL_RSI_MIN with a genuine
+    out-of-sample split (older half trains, newer untouched half evaluates --
+    the check that caught the 2026-07-23 systematic-screen overfitting
+    mistake, see STRATEGY.md "Rejected hypotheses"). Retired 2026-08-24: ever
+    since stocks went dual (2026-08-17, Bollinger + EMA9/21, either can open
+    a position) and crypto switched to Donchian breakout (period-based, no
+    RSI entry parameter at all), neither live strategy is a single RSI
+    threshold pair anymore, so a BUY_RSI_MAX/SELL_RSI_MIN grid doesn't map
+    onto anything actually deployed on either watchlist. A real optimizer for
+    either current strategy would need its own dedicated grid (Bollinger's
+    period/std/oversold-RSI for stocks, Donchian's breakout/exit period for
+    crypto), not a reuse of this one -- not built since neither has asked for
+    it yet. Use /backtest for current live numbers on both watchlists
+    instead. Read-only either way: this always was analysis only, never
+    changed a live threshold."""
+    return ('/optimize is retired -- it grid-searched BUY_RSI_MAX/SELL_RSI_MIN, which neither '
+            'live strategy uses anymore (stock: dual Bollinger+EMA9/21 since 2026-08-17; '
+            'crypto: Donchian breakout since 2026-08-24, no RSI entry parameter). '
+            'Use /backtest for current live numbers on both watchlists.')
 
 
 def handle_command(text: str, chat_id: str, client: AlpacaClient):

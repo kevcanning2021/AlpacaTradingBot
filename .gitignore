@@ -8,3 +8,4 @@ reentry_state.json
 position_opened_state.json
 strategy_check_state.json
 trade_history.json
+scratch_crypto_backtest/
