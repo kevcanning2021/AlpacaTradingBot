@@ -169,3 +169,39 @@ gets them, not just whoever's driving a particular session.
     pull will actually bring in — the diff-check has to run every time,
     on every target, regardless of how small or safe the intended change
     seems.
+
+24. **Searching a multi-day bar window for "the bar at hour X, minute Y"
+    without also filtering by date will silently return the wrong day's
+    bar, not an error — and the failure is invisible unless checked against
+    the raw data directly.** Happened in the sibling `pdt15rev-bot` project,
+    not here, but the bug pattern applies anywhere this codebase fetches a
+    multi-day bar window and looks for a specific time-of-day bar: querying
+    a small number of recent 15-min bars right at a session's start pulled
+    in several prior trading days to fill the window, and an unscoped
+    `hour == X and minute == Y` search returned the *first* match in the
+    ascending-sorted list — the oldest matching day, not today. A whole
+    day's worth of trading decisions ran against the wrong reference
+    range, and every log line looked completely normal; nothing about the
+    output signaled a problem. Found only by re-fetching the specific bar
+    directly from the API and comparing it byte-for-byte against what got
+    captured live. Any time-of-day bar lookup against a window that could
+    span more than one day needs an explicit same-day filter, not just an
+    hour/minute match — and don't trust a quiet, error-free log as proof
+    the right data was used.
+
+25. **A backtest that looks positive in aggregate or across rolling
+    windows can still be actively unprofitable *right now* — check recent
+    performance specifically before deploying a new candidate, not just
+    the full-history or rolling-window summary.** Comparing Donchian
+    breakout against Bollinger mean-reversion for a new crypto strategy,
+    Bollinger's full-window and rolling-window numbers looked reasonable
+    (69-87% of 90-day windows non-negative), but its most recent 9 months
+    were badly negative on both symbols (-34.56%/-50.88% total) — it had
+    been repeatedly buying dips into a real, still-ongoing decline.
+    Lesson 21 already established not to panic over a single bad window
+    given historical variance for an *already-deployed* strategy; this is
+    the inverse case — for a *candidate* being considered for deployment,
+    the most recent window is the one that actually matters most, since
+    that's the regime it would start trading in immediately. A strategy
+    can pass every historical robustness check and still be the wrong
+    choice today if its current trajectory is bad.

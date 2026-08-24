@@ -6,7 +6,7 @@ A Python-based trading bot that monitors your positions during market hours, aut
 
 - **Market Hours Monitoring**: Runs only during market hours (9:30 AM - 4:00 PM ET, Mon-Fri)
 - **Periodic Checks**: Checks positions every 60 minutes (once per hour)
-- **Opportunity Scanner**: Scans a configurable watchlist and automatically buys/sells on the signal (`scanner.py`, `trader.py: scan_and_execute`). Stocks use Bollinger Band(20,2) mean-reversion (RSI-confirmed lower-band bounce entry, middle-band/overbought exit); crypto uses EMA9/21 crossover + RSI — see `STRATEGY.md` for why these differ and the backtest behind each
+- **Opportunity Scanner**: Scans a configurable watchlist and automatically buys/sells on the signal (`scanner.py`, `trader.py: scan_and_execute`). Stocks use Bollinger Band(20,2) mean-reversion (RSI-confirmed lower-band bounce entry, middle-band/overbought exit); crypto uses Donchian(20,10) breakout — see `STRATEGY.md` for why these differ and the backtest behind each
 - **Stop Loss Management**: Automatically closes a position when it moves 5% against entry (`STOP_LOSS_THRESHOLD`), or 8% from its peak (`TRAILING_STOP_THRESHOLD`)
 - **Re-entry**: Automatically adds to a position on a 5% pullback from its own peak (not entry price), gated by RSI momentum and a minimum position age (`MIN_REENTRY_AGE_HOURS`, default 4h) — places a real order, not just a suggestion
 - **Interactive CLI**: Easy-to-use command interface
@@ -64,7 +64,7 @@ Edit `config/settings.py` (or set via `.env`) to customize:
 - `POSITION_SIZE_USD`: Dollar amount bought per new scanner position, as a notional (fractional-share) order — works at any account size and any share price (default: 1000)
 - `MAX_POSITIONS`: Max concurrent open positions the scanner will hold (default: 5)
 - `CRYPTO_WATCHLIST`: Comma-separated crypto pairs scanned 24/7, independent of stock market hours (default: `BTC/USD,ETH/USD`)
-- `CRYPTO_CHECK_INTERVAL_MINUTES`: How often to run the crypto scan/position check, around the clock (default: 60)
+- `CRYPTO_CHECK_INTERVAL_MINUTES`: How often to run the crypto scan/position check, around the clock (default: 15)
 - `CRYPTO_POSITION_SIZE_USD`: Dollar amount bought per new crypto position (default: 500)
 - `CRYPTO_MAX_POSITIONS`: Max concurrent open crypto positions (default: 2, tracked separately from stock `MAX_POSITIONS`)
 - `CRYPTO_STOP_LOSS_THRESHOLD`: Entry-anchored stop-loss threshold for crypto positions, separate from `STOP_LOSS_THRESHOLD` since crypto's ordinary volatility is far wider than stocks (default: 15%)
@@ -75,7 +75,7 @@ Edit `config/settings.py` (or set via `.env`) to customize:
 - `main.py` - Entry point
 - `cli.py` - Interactive command-line interface
 - `scheduler.py` - APScheduler integration for market hours monitoring
-- `scanner.py` - Opportunity scanner (Bollinger Band mean-reversion for stocks, EMA9/21 crossover + RSI for crypto)
+- `scanner.py` - Opportunity scanner (dual Bollinger Band + EMA9/21 for stocks, Donchian breakout for crypto)
 - `trader.py` - Core trading logic, position management, and scanner order execution
 - `alpaca_client.py` - Alpaca API wrapper
 - `config/settings.py` - Configuration parameters
