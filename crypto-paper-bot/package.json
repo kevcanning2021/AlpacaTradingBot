@@ -1,0 +1,24 @@
+{
+  "name": "crypto-paper-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper-trading-only BTC/USDT 9/21 EMA crossover bot with a two-file memory system (no live orders, no broker adapter).",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "scan": "ts-node src/index.ts scan",
+    "replay:raw": "ts-node src/index.ts replay:raw",
+    "replay:memory": "ts-node src/index.ts replay:memory",
+    "memory:reset": "ts-node src/index.ts memory:reset"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

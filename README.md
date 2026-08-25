@@ -6,9 +6,9 @@ A Python-based trading bot that monitors your positions during market hours, aut
 
 - **Market Hours Monitoring**: Runs only during market hours (9:30 AM - 4:00 PM ET, Mon-Fri)
 - **Periodic Checks**: Checks positions every 60 minutes (once per hour)
-- **Opportunity Scanner**: Scans a configurable watchlist for EMA9/21 crossover + RSI signals and automatically buys/sells on them (`scanner.py`, `trader.py: scan_and_execute`)
-- **Stop Loss Management**: Alerts when positions move 5% in either direction
-- **Re-entry Suggestions**: Recommends re-entries when positions pullback 5% from peak
+- **Opportunity Scanner**: Scans a configurable watchlist and automatically buys/sells on the signal (`scanner.py`, `trader.py: scan_and_execute`). Stocks use Bollinger Band(20,2) mean-reversion (RSI-confirmed lower-band bounce entry, middle-band/overbought exit); crypto uses Donchian(20,10) breakout — see `STRATEGY.md` for why these differ and the backtest behind each
+- **Stop Loss Management**: Automatically closes a position when it moves 5% against entry (`STOP_LOSS_THRESHOLD`), or 8% from its peak (`TRAILING_STOP_THRESHOLD`)
+- **Re-entry**: Automatically adds to a position on a 5% pullback from its own peak (not entry price), gated by RSI momentum and a minimum position age (`MIN_REENTRY_AGE_HOURS`, default 4h) — places a real order, not just a suggestion
 - **Interactive CLI**: Easy-to-use command interface
 - **Paper Trading Support**: Works with Alpaca paper trading accounts
 
@@ -54,20 +54,28 @@ python main.py
 
 Edit `config/settings.py` (or set via `.env`) to customize:
 - `CHECK_INTERVAL_MINUTES`: How often to check positions (default: 60)
-- `STOP_LOSS_THRESHOLD`: Percentage threshold for stop loss alerts (default: 5%)
-- `REENTRY_THRESHOLD`: Percentage pullback for re-entry suggestions (default: 5%)
+- `STOP_LOSS_THRESHOLD`: Percentage threshold for the entry-anchored stop loss (default: 5%)
+- `TRAILING_STOP_THRESHOLD`: Percentage pullback from peak price for the trailing stop (default: 8%)
+- `REENTRY_THRESHOLD`: Percentage pullback **from a position's own tracked peak price** (not entry price) that triggers a real re-entry buy (default: 5%)
+- `MIN_REENTRY_AGE_HOURS`: Minimum time a position must have been open before a re-entry can fire — a fresh position's peak is just its entry price, so this stops an ordinary intraday dip minutes after a fill from being mistaken for a real pullback (default: 4h)
 - `MARKET_OPEN_HOUR/MINUTE`: Market opening time (default: 9:30 AM ET)
 - `MARKET_CLOSE_HOUR/MINUTE`: Market closing time (default: 4:00 PM ET)
 - `WATCHLIST`: Comma-separated symbols the opportunity scanner scans (default: `AAPL,MSFT,GOOGL,AMZN,NVDA,SPY,QQQ`)
 - `POSITION_SIZE_USD`: Dollar amount bought per new scanner position, as a notional (fractional-share) order — works at any account size and any share price (default: 1000)
 - `MAX_POSITIONS`: Max concurrent open positions the scanner will hold (default: 5)
+- `CRYPTO_WATCHLIST`: Comma-separated crypto pairs scanned 24/7, independent of stock market hours (default: `BTC/USD,ETH/USD`)
+- `CRYPTO_CHECK_INTERVAL_MINUTES`: How often to run the crypto scan/position check, around the clock (default: 15)
+- `CRYPTO_POSITION_SIZE_USD`: Dollar amount bought per new crypto position (default: 500)
+- `CRYPTO_MAX_POSITIONS`: Max concurrent open crypto positions (default: 2, tracked separately from stock `MAX_POSITIONS`)
+- `CRYPTO_STOP_LOSS_THRESHOLD`: Entry-anchored stop-loss threshold for crypto positions, separate from `STOP_LOSS_THRESHOLD` since crypto's ordinary volatility is far wider than stocks (default: 15%)
+- `CRYPTO_TRAILING_STOP_THRESHOLD`: Peak-relative trailing-stop threshold for crypto positions, separate from `TRAILING_STOP_THRESHOLD` for the same reason (default: 20%)
 
 ## Architecture
 
 - `main.py` - Entry point
 - `cli.py` - Interactive command-line interface
 - `scheduler.py` - APScheduler integration for market hours monitoring
-- `scanner.py` - EMA9/21 crossover + RSI opportunity scanner
+- `scanner.py` - Opportunity scanner (dual Bollinger Band + EMA9/21 for stocks, Donchian breakout for crypto)
 - `trader.py` - Core trading logic, position management, and scanner order execution
 - `alpaca_client.py` - Alpaca API wrapper
 - `config/settings.py` - Configuration parameters
@@ -107,20 +115,20 @@ Exiting...
 ## Notes
 
 - The scheduler runs in the background and monitors positions during market hours
-- Stop-loss/re-entry outputs are recommendations only, reviewed via the CLI — but the opportunity scanner (`scan_and_execute`) **automatically places buy/sell orders** on its signals with no manual approval step, subject to the guard conditions in `trader.py` (already-held symbol, `MAX_POSITIONS`, buying power)
+- The opportunity scanner (`scan_and_execute`) **automatically places buy/sell orders** on its signals with no manual approval step, subject to the guard conditions in `trader.py` (already-held symbol, `MAX_POSITIONS`, buying power). The stop-loss (`_handle_stop_loss`) and trailing-stop (`_handle_trailing_stop`) **automatically close** a position when breached, and re-entry (`_handle_reentry`) **automatically places a real buy order** on a qualifying pullback — none of these are advisory-only or require CLI review. Fires at most once per pullback episode (until a new peak resets it) and only after `MIN_REENTRY_AGE_HOURS` has elapsed.
 - The bot uses Alpaca's paper trading API by default (set in `.env`)
 - Position history is kept for the last 100 checks
 
 ## Notifications
 
-Trade executions, strategy adjustments, and a daily account status report can be sent via WhatsApp (`whatsapp_notifier.py`, using [CallMeBot](https://www.callmebot.com/)), set via `.env`:
+Real trade opens/closes (scanner buys/sells, stop-loss/trailing-stop/re-entry triggers) and genuine operational errors (a close/order that failed) are sent via Telegram (`telegram_notifier.py`, using the [Telegram Bot API](https://core.telegram.org/bots/api)), set via `.env`. Purely informational events — a daily status report, or `_handle_reentry` analyzing a pullback and deciding not to act (`REENTRY_SKIPPED`) — don't notify; only real trades and errors do.
 
-- `WHATSAPP_ENABLED=true`
-- `WHATSAPP_PHONE` — international format without `+`, e.g. `27831234567`
-- `WHATSAPP_APIKEY` — API key issued by CallMeBot
+- `TELEGRAM_ENABLED=true`
+- `TELEGRAM_BOT_TOKEN` — from [@BotFather](https://t.me/BotFather)
+- `TELEGRAM_CHAT_ID` — your personal chat ID with the bot
 
-`email_notifier.py` (SMTP-based) still exists in the repo but `trader.py` no longer instantiates it — `EMAIL_*` settings currently have no effect.
+Switched from WhatsApp (via CallMeBot) to Telegram on 2026-08-04 after CallMeBot's free quota ran out. `whatsapp_notifier.py` still exists (kept for reference/rollback) but nothing instantiates it anymore — `WHATSAPP_*` settings currently have no effect. The old SMTP-based `email_notifier.py` was removed entirely on 2026-08-11 (it had zero call sites anywhere, unlike WhatsApp's deliberate keep-for-reference) — `EMAIL_*` settings no longer exist.
 
 ## Deployment
 
-See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for how this is deployed (systemd on a VPS) and its current limitations.
+See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for how this is deployed (systemd on a VPS) and its current limitations, and [LESSONS.md](LESSONS.md) for durable mistakes-to-never-repeat from this project's history.

@@ -1,14 +1,24 @@
+import json
 import logging
-from datetime import datetime
-from typing import Dict
+import os
+from datetime import datetime, timezone
+from typing import Dict, Optional
 import pytz
-from alpaca_client import AlpacaClient
+from alpaca_client import AlpacaClient, position_symbol
 from config import settings
-from whatsapp_notifier import WhatsAppNotifier
-from scanner import OpportunityScanner
+from telegram_notifier import TelegramNotifier
+from scanner import OpportunityScanner, _compute_rsi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'peak_prices_state.json')
+REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reentry_state.json')
+TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
+POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
+ZERO_SINCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'zero_since_state.json')
+DROUGHT_CALENDAR_DAYS = 14  # approximates scanner.py's DROUGHT_TRADING_DAYS (10) accounting for weekends
 
 
 def _now() -> str:
@@ -16,25 +26,176 @@ def _now() -> str:
     return datetime.now(pytz.timezone(settings.REPORT_TIMEZONE)).isoformat()
 
 
+def _order_symbol_for(pos_symbol: str) -> Optional[str]:
+    """Reverse of alpaca_client.position_symbol(): map a position-format symbol
+    (e.g. 'BTCUSD') back to the order-format symbol create_order() needs (e.g.
+    'BTC/USD'). There's no generic algorithmic reverse (quote-currency length
+    varies), so this only resolves symbols currently in WATCHLIST/CRYPTO_WATCHLIST.
+    """
+    for w in settings.WATCHLIST + settings.CRYPTO_WATCHLIST:
+        if position_symbol(w) == pos_symbol:
+            return w
+    return None
+
+
 class TradingManager:
     """Manages trading positions and stop loss adjustments"""
-    
+
     def __init__(self):
         self.client = AlpacaClient()
-        self.notifier = WhatsAppNotifier()
-        self.position_entry_prices = {}  # Track entry prices
-        self.position_peak_prices = {}   # Track peak prices for stop loss
-        self.trade_history = []          # Track all trades for P&L analysis
+        self.notifier = TelegramNotifier()
+        self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
+        self.position_opened_at = self._load_position_opened_at()  # When each open position was first observed
+        self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
+        self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
+        self.position_methods = self._load_position_methods()  # Which signal source opened each held stock position
+        self.zero_since = self._load_zero_since()  # ISO date the stock watchlist first hit zero open positions, or None
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
         self.loss_streak = 0             # Current losing streak
-    
-    def check_positions(self) -> Dict:
-        """Check all open positions and apply trading logic"""
+
+    def _load_peak_prices(self) -> Dict:
+        """Load persisted peak prices so the trailing stop survives a service restart —
+        otherwise a restart silently re-seeds every peak to the current price, discarding
+        any pre-restart gain the trailing stop was supposed to be protecting.
+        """
+        if os.path.exists(PEAK_PRICES_FILE):
+            try:
+                with open(PEAK_PRICES_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load peak prices state, starting fresh: {e}")
+        return {}
+
+    def _save_peak_prices(self):
+        try:
+            with open(PEAK_PRICES_FILE, 'w') as f:
+                json.dump(self.position_peak_prices, f)
+        except OSError as e:
+            logger.error(f"Failed to save peak prices state: {e}")
+
+    def _load_position_opened_at(self) -> Dict:
+        """Load persisted position-open timestamps so the reentry min-age gate
+        (see _handle_reentry) survives a service restart -- otherwise a restart
+        would lose track of how long a position has actually been held, same
+        restart-safety reasoning as peak prices above."""
+        if os.path.exists(POSITION_OPENED_FILE):
+            try:
+                with open(POSITION_OPENED_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load position-opened state, starting fresh: {e}")
+        return {}
+
+    def _save_position_opened_at(self):
+        try:
+            with open(POSITION_OPENED_FILE, 'w') as f:
+                json.dump(self.position_opened_at, f)
+        except OSError as e:
+            logger.error(f"Failed to save position-opened state: {e}")
+
+    def _load_reentry_state(self) -> list:
+        """Which symbols have already re-entered since their current peak was set —
+        persisted for the same reason as peak prices: a restart shouldn't silently
+        reset this and allow an immediate re-fire on a pullback already acted on."""
+        if os.path.exists(REENTRY_STATE_FILE):
+            try:
+                with open(REENTRY_STATE_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load re-entry state, starting fresh: {e}")
+        return []
+
+    def _save_reentry_state(self):
+        try:
+            with open(REENTRY_STATE_FILE, 'w') as f:
+                json.dump(list(self.reentry_fired), f)
+        except OSError as e:
+            logger.error(f"Failed to save re-entry state: {e}")
+
+    def _load_trade_history(self) -> list:
+        """Persisted so realized P&L survives a restart -- strategy_check.py (a
+        separate process) reads this to compare live forward-test results against
+        the backtest once enough closed trades exist, which needs the full history,
+        not just whatever's accumulated since the last restart."""
+        if os.path.exists(TRADE_HISTORY_FILE):
+            try:
+                with open(TRADE_HISTORY_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load trade history, starting fresh: {e}")
+        return []
+
+    def _save_trade_history(self):
+        try:
+            with open(TRADE_HISTORY_FILE, 'w') as f:
+                json.dump(self.trade_history, f)
+        except OSError as e:
+            logger.error(f"Failed to save trade history: {e}")
+
+    def _load_position_methods(self) -> Dict:
+        """Which of the two dual stock signal sources ('bollinger' or 'ema') opened
+        each currently-held position -- persisted for the same restart-safety reason
+        as the other state files, and because it's load-bearing for correctness, not
+        just convenience: scan_and_execute() must check a held position against the
+        exact method that opened it, or a position could be evaluated against the
+        wrong exit rule after a restart. Crypto positions are never in this dict --
+        crypto has only ever had a single method (EMA9/21 until 2026-08-24,
+        Donchian breakout since -- never dual), see scanner.py."""
+        if os.path.exists(POSITION_METHOD_FILE):
+            try:
+                with open(POSITION_METHOD_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load position-method state, starting fresh: {e}")
+        return {}
+
+    def _save_position_methods(self):
+        try:
+            with open(POSITION_METHOD_FILE, 'w') as f:
+                json.dump(self.position_methods, f)
+        except OSError as e:
+            logger.error(f"Failed to save position-method state: {e}")
+
+    def _load_zero_since(self) -> Optional[str]:
+        """ISO date the stock watchlist first observed zero open positions, or
+        None if a stock position is currently open -- drives scanner.py's drought
+        fallback (BOLLINGER_STD_FALLBACK). Persisted for the same restart-safety
+        reason as the other state files; without it, a restart during a real
+        drought would reset the count to zero and delay the fallback becoming
+        eligible again."""
+        if os.path.exists(ZERO_SINCE_FILE):
+            try:
+                with open(ZERO_SINCE_FILE) as f:
+                    return json.load(f).get('zero_since')
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load zero-since state, starting fresh: {e}")
+        return None
+
+    def _save_zero_since(self):
+        try:
+            with open(ZERO_SINCE_FILE, 'w') as f:
+                json.dump({'zero_since': self.zero_since}, f)
+        except OSError as e:
+            logger.error(f"Failed to save zero-since state: {e}")
+
+    def check_positions(self, asset_class: Optional[str] = None) -> Dict:
+        """Check all open positions and apply trading logic.
+
+        Pass asset_class='crypto' or 'us_equity' to restrict which positions get
+        evaluated. The always-on crypto job needs this scoped to 'crypto' — Alpaca
+        queues a stock market order submitted outside trading hours as a next-session
+        day order, so an unscoped call would let a stale overnight price trip a stock's
+        5%/8% stop and realize whatever the next open's gap turns out to be, instead of
+        actually capping the loss at that threshold.
+        """
         try:
             positions = self.client.get_positions()
+            if asset_class is not None:
+                positions = [p for p in positions if p.get('asset_class') == asset_class]
             account = self.client.get_account()
-            
+            buying_power = float(account.get('buying_power', 0))  # decremented locally as re-entry buys fire below
+
             report = {
                 'timestamp': _now(),
                 'account_equity': account.get('equity'),
@@ -43,7 +204,7 @@ class TradingManager:
                 'actions_taken': [],
                 'errors': []
             }
-            
+
             for position in positions:
                 symbol = position.get('symbol')
                 qty = float(position.get('qty', 0))
@@ -55,22 +216,50 @@ class TradingManager:
                 # Calculate gain/loss percentage
                 pnl_pct = (current_price - avg_entry_price) / avg_entry_price if avg_entry_price > 0 else 0
                 
+                # First time this symbol has been observed open (a fresh position, or an
+                # already-open one from before this tracking existed) -- record it as the
+                # age reference for the reentry min-age gate below. For a position that
+                # predates this feature, this conservatively resets its "age" to now rather
+                # than leaving it permanently un-reentry-able with no recorded open time.
+                if symbol not in self.position_opened_at:
+                    self.position_opened_at[symbol] = datetime.now(timezone.utc).isoformat()
+                    self._save_position_opened_at()
+
                 # Update peak price tracking
                 if symbol not in self.position_peak_prices:
                     self.position_peak_prices[symbol] = current_price
+                    self._save_peak_prices()
                 else:
                     if current_price > self.position_peak_prices[symbol]:
                         self.position_peak_prices[symbol] = current_price
-                
-                # Handle stop loss adjustments
-                if settings.ENABLE_STOP_LOSS_ADJUSTMENT:
-                    self._handle_stop_loss(symbol, position, pnl_pct, report)
-                
-                # Handle re-entries
-                if settings.ENABLE_REENTRY:
-                    self._handle_reentry(symbol, position, pnl_pct, report)
+                        self._save_peak_prices()
+                        # A fresh peak starts a new pullback episode -- allow another
+                        # re-entry once this new high gives back enough to qualify again.
+                        if symbol in self.reentry_fired:
+                            self.reentry_fired.discard(symbol)
+                            self._save_reentry_state()
 
-            if report['actions_taken'] and self.notifier.enabled:
+                # Handle stop loss adjustments
+                closed = False
+                if settings.ENABLE_STOP_LOSS_ADJUSTMENT:
+                    closed = self._handle_stop_loss(symbol, position, pnl_pct, report)
+
+                # Trailing stop: protects gains given back from a position's peak,
+                # which the entry-anchored stop loss above can't see at all
+                if not closed and settings.ENABLE_STOP_LOSS_ADJUSTMENT:
+                    closed = self._handle_trailing_stop(symbol, position, report)
+
+                # Handle re-entries
+                if not closed and settings.ENABLE_REENTRY:
+                    buying_power = self._handle_reentry(symbol, position, pnl_pct, report, buying_power)
+
+            # REENTRY_SKIPPED means the bot analyzed a pullback and decided NOT to act --
+            # no trade, no error, nothing changed. Notifying on that is noise, not signal
+            # (same reasoning that removed the STOP_LOSS_CANDIDATE advisory on 2026-07-14).
+            # Every other action type here is either a real trade open/close (*_TRIGGERED)
+            # or a genuine failure (*_ALERT, REENTRY_FAILED), so those still notify.
+            notifiable = [a for a in report['actions_taken'] if a.get('action') != 'REENTRY_SKIPPED']
+            if notifiable and self.notifier.enabled:
                 try:
                     subject, body = self.notifier.build_position_alert_email(report)
                     self.notifier.send(subject, body)
@@ -84,60 +273,269 @@ class TradingManager:
             logger.error(f"Error checking positions: {e}")
             return {'error': str(e), 'timestamp': _now()}
     
-    def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
-        """Handle stop loss adjustments at 5% threshold"""
+    def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict) -> bool:
+        """Handle stop loss adjustments at the entry-anchored threshold. Returns True if closed.
+
+        Crypto uses its own, wider CRYPTO_STOP_LOSS_THRESHOLD instead of STOP_LOSS_THRESHOLD —
+        see the backtest note next to CRYPTO_STOP_LOSS_THRESHOLD in config/settings.py for why
+        the stock-tuned 5% is far too tight for crypto's ordinary volatility.
+        """
         try:
-            # If position is up at or above current stop loss threshold, consider tightening stop
-            if pnl_pct >= settings.STOP_LOSS_THRESHOLD:
-                action = {
-                    'action': 'STOP_LOSS_CANDIDATE',
-                    'symbol': symbol,
-                    'pnl_pct': round(pnl_pct * 100, 2),
-                    'recommendation': f'Position is up {round(pnl_pct * 100, 2)}%. Consider trailing stop or moving stop up.'
-                }
+            threshold = settings.CRYPTO_STOP_LOSS_THRESHOLD if position.get('asset_class') == 'crypto' else settings.STOP_LOSS_THRESHOLD
+
+            # If position is down at or below current stop loss threshold, close it.
+            # (No separate "up" branch here — the independent trailing stop already
+            # protects gains above threshold; a duplicate advisory used to fire on
+            # every single check for as long as the position stayed elevated, which
+            # meant an hourly notification message for every winning
+            # position once notifications are enabled.)
+            if pnl_pct <= -threshold:
+                closed = False
+                try:
+                    self.client.close_position(symbol)
+                    self._record_trade_outcome(symbol, position)
+                    self.position_peak_prices.pop(symbol, None)
+                    self._save_peak_prices()
+                    self.position_opened_at.pop(symbol, None)
+                    self._save_position_opened_at()
+                    if symbol in self.reentry_fired:
+                        self.reentry_fired.discard(symbol)
+                        self._save_reentry_state()
+                    self.position_methods.pop(symbol, None)
+                    self._save_position_methods()
+                    closed = True
+                    action = {
+                        'action': 'STOP_LOSS_TRIGGERED',
+                        'symbol': symbol,
+                        'pnl_pct': round(pnl_pct * 100, 2),
+                        'recommendation': f'Position was down {round(abs(pnl_pct) * 100, 2)}%. Closed automatically.'
+                    }
+                    logger.warning(f"[{symbol}] Position down {round(abs(pnl_pct) * 100, 2)}% - closed automatically (stop loss)")
+                except Exception as close_error:
+                    action = {
+                        'action': 'STOP_LOSS_ALERT',
+                        'symbol': symbol,
+                        'pnl_pct': round(pnl_pct * 100, 2),
+                        'recommendation': f'Position is down {round(abs(pnl_pct) * 100, 2)}%. Automatic close FAILED: {close_error}'
+                    }
+                    logger.error(f"[{symbol}] Stop loss close failed: {close_error}")
                 report['actions_taken'].append(action)
-                logger.info(f"[{symbol}] Position up {round(pnl_pct * 100, 2)}% - Stop loss adjustment recommended")
-            
-            # If position is down at or below current stop loss threshold, alert
-            elif pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
-                action = {
-                    'action': 'STOP_LOSS_ALERT',
-                    'symbol': symbol,
-                    'pnl_pct': round(pnl_pct * 100, 2),
-                    'recommendation': f'Position is down {round(abs(pnl_pct) * 100, 2)}%. Review stop loss level.'
-                }
-                report['actions_taken'].append(action)
-                logger.warning(f"[{symbol}] Position down {round(abs(pnl_pct) * 100, 2)}% - Stop loss review recommended")
-        
+                return closed
+
+            return False
+
         except Exception as e:
             report['errors'].append(f"Error handling stop loss for {symbol}: {e}")
             logger.error(f"Error handling stop loss for {symbol}: {e}")
-    
-    def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict):
-        """Handle re-entry logic at current pullback threshold"""
+            return False
+
+    def _handle_trailing_stop(self, symbol: str, position: Dict, report: Dict) -> bool:
+        """Close a position if it has pulled back TRAILING_STOP_THRESHOLD from its peak price.
+
+        Separate from _handle_reentry's pullback-from-peak check below, which is an
+        advisory add-to-position suggestion on REENTRY_THRESHOLD, not a sell — this
+        is the downside-protection counterpart, using TRAILING_STOP_THRESHOLD (wider than
+        the entry-anchored STOP_LOSS_THRESHOLD) since the entry-anchored stop loss above
+        can't see gains a position has given back, and a peak-relative stop needs more
+        room than an entry-relative one to avoid closing on ordinary volatility.
+
+        Crypto uses its own, wider CRYPTO_TRAILING_STOP_THRESHOLD instead of
+        TRAILING_STOP_THRESHOLD — see the backtest note next to CRYPTO_TRAILING_STOP_THRESHOLD
+        in config/settings.py for why the stock-tuned 8% is far too tight for crypto.
+        Returns True if the position was closed.
+        """
         try:
+            threshold = settings.CRYPTO_TRAILING_STOP_THRESHOLD if position.get('asset_class') == 'crypto' else settings.TRAILING_STOP_THRESHOLD
             peak_price = self.position_peak_prices.get(symbol, 0)
             current_price = float(position.get('current_price', 0))
-            
-            if peak_price > 0:
-                pullback_pct = (peak_price - current_price) / peak_price
-                
-                # If we've had a pullback at or above the current re-entry threshold, suggest re-entry
-                if pullback_pct >= settings.REENTRY_THRESHOLD:
-                    action = {
-                        'action': 'REENTRY_CANDIDATE',
-                        'symbol': symbol,
-                        'pullback_pct': round(pullback_pct * 100, 2),
-                        'peak_price': round(peak_price, 2),
-                        'current_price': round(current_price, 2),
-                        'recommendation': f'Position pulled back {round(pullback_pct * 100, 2)}% from peak. Consider re-entry.'
-                    }
-                    report['actions_taken'].append(action)
-                    logger.info(f"[{symbol}] Pullback of {round(pullback_pct * 100, 2)}% detected - Re-entry candidate")
-        
+            if peak_price <= 0:
+                return False
+
+            pullback_pct = (peak_price - current_price) / peak_price
+            if pullback_pct < threshold:
+                return False
+
+            try:
+                self.client.close_position(symbol)
+                self._record_trade_outcome(symbol, position)
+                self.position_peak_prices.pop(symbol, None)
+                self._save_peak_prices()
+                self.position_opened_at.pop(symbol, None)
+                self._save_position_opened_at()
+                if symbol in self.reentry_fired:
+                    self.reentry_fired.discard(symbol)
+                    self._save_reentry_state()
+                self.position_methods.pop(symbol, None)
+                self._save_position_methods()
+                action = {
+                    'action': 'TRAILING_STOP_TRIGGERED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'peak_price': round(peak_price, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak (${round(peak_price, 2)}). Closed automatically.'
+                }
+                logger.warning(f"[{symbol}] Pulled back {round(pullback_pct * 100, 2)}% from peak ${round(peak_price, 2)} - closed automatically (trailing stop)")
+                report['actions_taken'].append(action)
+                return True
+            except Exception as close_error:
+                action = {
+                    'action': 'TRAILING_STOP_ALERT',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak. Automatic close FAILED: {close_error}'
+                }
+                logger.error(f"[{symbol}] Trailing stop close failed: {close_error}")
+                report['actions_taken'].append(action)
+                return False
+
+        except Exception as e:
+            report['errors'].append(f"Error handling trailing stop for {symbol}: {e}")
+            logger.error(f"Error handling trailing stop for {symbol}: {e}")
+            return False
+    
+    def _handle_reentry(self, symbol: str, position: Dict, pnl_pct: float, report: Dict, buying_power: float) -> float:
+        """Add to an existing open position on a pullback from its peak (only reached when
+        stop-loss/trailing-stop didn't already close it this check, i.e. the pullback is
+        real but not a breakdown). Places a real buy order as of 2026-07-14 — previously
+        advisory-only. Fires at most once per pullback episode (self.reentry_fired, cleared
+        when a fresh peak is set) so a position sitting at the same pullback level for many
+        consecutive checks doesn't re-buy every single time. Returns the (possibly
+        decremented) buying_power so callers checking multiple positions in one pass don't
+        each buy against a stale, shared figure.
+
+        Crypto uses its own, wider CRYPTO_REENTRY_THRESHOLD instead of REENTRY_THRESHOLD —
+        same reasoning as the stop-loss/trailing-stop split: the stock-tuned 5% is far too
+        tight for crypto's ordinary volatility.
+
+        Also requires RSI < OpportunityScanner.BUY_RSI_MAX (fetched fresh via get_bars),
+        same momentum gate a fresh scanner entry requires — a pullback-from-peak alone
+        doesn't confirm momentum has turned, added 2026-07-14 after review flagged that
+        the original version would average into a position on price distance alone with
+        no reference to RSI/EMA state at all.
+
+        Also requires the position to be at least MIN_REENTRY_AGE_HOURS old (added
+        2026-08-06 after GOOGL fired a real reentry ~2.5h after its original scan-buy,
+        same trading session). position_peak_prices[symbol] is set to current_price on
+        the very first check after entry, so without this gate an ordinary intraday dip
+        right after a fresh fill looks identical to a real pullback from an established
+        peak. Backtested against 300 real daily bars (stock + crypto watchlists): every
+        historical reentry in that window fired 7+ trading days after its entry, so a
+        several-hour (or even several-day) minimum age costs zero backtested expectancy
+        while directly blocking the observed same-session failure — see STRATEGY.md.
+        """
+        try:
+            threshold = settings.CRYPTO_REENTRY_THRESHOLD if position.get('asset_class') == 'crypto' else settings.REENTRY_THRESHOLD
+            peak_price = self.position_peak_prices.get(symbol, 0)
+            current_price = float(position.get('current_price', 0))
+
+            if peak_price <= 0:
+                return buying_power
+            pullback_pct = (peak_price - current_price) / peak_price
+            if pullback_pct < threshold or symbol in self.reentry_fired:
+                return buying_power
+
+            opened_at = self.position_opened_at.get(symbol)
+            age_hours = (
+                (datetime.now(timezone.utc) - datetime.fromisoformat(opened_at)).total_seconds() / 3600
+                if opened_at else None
+            )
+            if age_hours is None or age_hours < settings.MIN_REENTRY_AGE_HOURS:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': (
+                        f'Pulled back {round(pullback_pct * 100, 2)}% from peak but the position is only '
+                        f'{"an unknown age (no opened_at recorded)" if age_hours is None else f"{age_hours:.1f}h old"} '
+                        f'(needs {settings.MIN_REENTRY_AGE_HOURS}h) — peak this fresh isn\'t trustworthy yet. No buy placed.'
+                    )
+                })
+                logger.info(f"[{symbol}] Re-entry threshold hit but position too young ({age_hours} h) — skipping")
+                return buying_power
+
+            is_crypto = position.get('asset_class') == 'crypto'
+            position_size_usd = settings.CRYPTO_POSITION_SIZE_USD if is_crypto else settings.POSITION_SIZE_USD
+            order_symbol = _order_symbol_for(symbol)
+
+            if order_symbol is None:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak but {symbol} is not on a configured watchlist, so its order-format symbol could not be resolved. No buy placed.'
+                })
+                logger.warning(f"[{symbol}] Re-entry threshold hit but no order-format symbol found on any watchlist — skipping")
+                return buying_power
+
+            # Unlike a fresh scanner entry (which requires EMA9>EMA21 crossing AND RSI <
+            # BUY_RSI_MAX), a pullback-from-peak alone says nothing about whether momentum
+            # has actually turned back up -- reuse the scanner's own overbought/momentum
+            # gate here too, rather than averaging into a position purely on price distance.
+            try:
+                bars = self.client.get_bars(order_symbol, limit=35)
+                closes = [float(b['c']) for b in bars]
+                rsi = _compute_rsi(closes) if len(closes) >= 15 else None
+            except Exception as bar_error:
+                rsi = None
+                logger.error(f"[{symbol}] Re-entry RSI check failed: {bar_error}")
+
+            if rsi is None or rsi >= OpportunityScanner.BUY_RSI_MAX:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': (
+                        f'Pulled back {round(pullback_pct * 100, 2)}% from peak but RSI '
+                        f'({"unavailable" if rsi is None else round(rsi, 1)}) does not confirm '
+                        f'momentum has turned (needs < {OpportunityScanner.BUY_RSI_MAX}). No buy placed.'
+                    )
+                })
+                logger.info(f"[{symbol}] Re-entry threshold hit but RSI momentum check failed (RSI={rsi})")
+                return buying_power
+
+            if buying_power < position_size_usd:
+                report['actions_taken'].append({
+                    'action': 'REENTRY_SKIPPED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak but buying power (${buying_power:.2f}) is below the ${position_size_usd:.2f} re-entry size. No buy placed.'
+                })
+                logger.info(f"[{symbol}] Re-entry threshold hit but insufficient buying power (${buying_power:.2f})")
+                return buying_power
+
+            notional = round(position_size_usd, 2)
+            client_order_id = f"reentry-{symbol}-{int(datetime.now().timestamp())}"
+            try:
+                order = self.client.create_order(order_symbol, side='buy', notional=notional, client_order_id=client_order_id)
+                self.reentry_fired.add(symbol)
+                self._save_reentry_state()
+                buying_power -= notional
+                action = {
+                    'action': 'REENTRY_TRIGGERED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'peak_price': round(peak_price, 2),
+                    'current_price': round(current_price, 2),
+                    'notional': notional,
+                    'order_id': order.get('id'),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak (${round(peak_price, 2)}). Added ${notional:.2f}.'
+                }
+                logger.warning(f"[{symbol}] Pulled back {round(pullback_pct * 100, 2)}% from peak ${round(peak_price, 2)} - added ${notional:.2f} (re-entry)")
+            except Exception as order_error:
+                action = {
+                    'action': 'REENTRY_FAILED',
+                    'symbol': symbol,
+                    'pullback_pct': round(pullback_pct * 100, 2),
+                    'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak. Re-entry buy FAILED: {order_error}'
+                }
+                logger.error(f"[{symbol}] Re-entry buy failed: {order_error}")
+            report['actions_taken'].append(action)
+            return buying_power
+
         except Exception as e:
             report['errors'].append(f"Error handling re-entry for {symbol}: {e}")
             logger.error(f"Error handling re-entry for {symbol}: {e}")
+            return buying_power
     
     def execute_order(self, symbol: str, qty: float, side: str, order_type: str = 'market') -> Dict:
         """Execute a trade order"""
@@ -167,7 +565,15 @@ class TradingManager:
             return {'error': str(e)}
     
     def adjust_strategy(self) -> Dict:
-        """Dynamically adjust strategy parameters based on performance"""
+        """Dynamically adjust strategy parameters based on performance.
+
+        NOT called from scheduler.py as of 2026-07-16 -- a full-system backtest
+        (real entries/exits/stops, 300 daily bars, ~14 months, test-account sizing)
+        found this underperformed fixed thresholds (+6.66% vs +7.65% total return)
+        while firing often (17 threshold changes across 25 closed trades). Left
+        intact rather than deleted since a more robust multi-window backtest could
+        still justify re-enabling it. See STRATEGY.md "Automated monitoring".
+        """
         try:
             account = self.client.get_account()
             current_equity = float(account.get('equity', settings.INITIAL_EQUITY))
@@ -231,40 +637,63 @@ class TradingManager:
             logger.error(f"Error adjusting strategy: {e}")
             return {'error': str(e)}
     
+    def _record_trade_outcome(self, symbol: str, position: Dict):
+        """Update win/loss streak from a single closed trade's realized P&L, and
+        persist it to TRADE_HISTORY_FILE for forward-test tracking (strategy_check.py
+        compares this against the backtest once enough closed trades exist).
+
+        Streaks are driven by actual closed trades, not by the concurrent
+        unrealized P&L direction of whatever happens to be open — two
+        correlated positions dipping together for a few hourly checks isn't
+        a losing streak, it's one market move.
+
+        Takes the closing position dict (not separate pnl/pct params) so pnl_pct
+        (Alpaca's unrealized_plpc, captured right before the close -- comparable to
+        the backtest's percentage-based expectancy, unlike dollar pnl which scales
+        with position size) and asset_class (to split stock vs. crypto forward-test
+        stats the same way the backtest already does) come from one place, not three
+        separately-maintained call sites.
+        """
+        pnl = float(position.get('unrealized_pl', 0))
+        pnl_pct = float(position.get('unrealized_plpc', 0))
+        if pnl > 0:
+            self.win_streak += 1
+            self.loss_streak = 0
+        elif pnl < 0:
+            self.loss_streak += 1
+            self.win_streak = 0
+        self.trade_history.append({
+            'symbol': symbol,
+            'pnl': pnl,
+            'pnl_pct': pnl_pct,
+            'asset_class': position.get('asset_class'),
+            'timestamp': _now(),
+        })
+        self._save_trade_history()
+
     def analyze_performance(self) -> Dict:
-        """Analyze trading performance and streaks"""
+        """Snapshot of current unrealized P&L plus the closed-trade win/loss streak"""
         try:
             positions = self.client.get_positions()
             account = self.client.get_account()
-            
+
             total_pnl = 0
-            winning_trades = 0
-            losing_trades = 0
-            
+            winning_positions = 0
+            losing_positions = 0
+
             for position in positions:
                 pnl = float(position.get('unrealized_pl', 0))
                 total_pnl += pnl
-                
+
                 if pnl > 0:
-                    winning_trades += 1
+                    winning_positions += 1
                 elif pnl < 0:
-                    losing_trades += 1
-            
-            # Update streaks (simplified - based on current session)
-            if winning_trades > losing_trades and losing_trades == 0:
-                self.win_streak += 1
-                self.loss_streak = 0
-            elif losing_trades > winning_trades and winning_trades == 0:
-                self.loss_streak += 1
-                self.win_streak = 0
-            else:
-                self.win_streak = 0
-                self.loss_streak = 0
-            
+                    losing_positions += 1
+
             return {
                 'total_pnl': total_pnl,
-                'winning_positions': winning_trades,
-                'losing_positions': losing_trades,
+                'winning_positions': winning_positions,
+                'losing_positions': losing_positions,
                 'win_streak': self.win_streak,
                 'loss_streak': self.loss_streak,
                 'current_equity': account.get('equity'),
@@ -275,18 +704,63 @@ class TradingManager:
             logger.error(f"Error analyzing performance: {e}")
             return {'error': str(e)}
 
-    def scan_and_execute(self) -> Dict:
-        """Scan the watchlist for opportunities and execute buy/sell orders."""
-        scanner = OpportunityScanner(self.client)
-        signals = scanner.scan(settings.WATCHLIST)
+    def scan_and_execute(self, watchlist=None, position_size_usd=None, max_positions=None) -> Dict:
+        """Scan a watchlist for opportunities and execute buy/sell orders.
+
+        Defaults to the stock watchlist/sizing; pass settings.CRYPTO_WATCHLIST etc.
+        to run the same logic against crypto instead.
+
+        Stocks run dual signal sources as of 2026-08-17 (see scanner.py class
+        docstring) -- positions must be fetched before scanning so each held
+        stock can be checked against the specific method (`self.position_methods`)
+        that opened it, not either/both. Crypto is unaffected: it was never in
+        held_methods to begin with, so it always takes scanner.py's single-EMA
+        branch regardless.
+        """
+        watchlist = watchlist if watchlist is not None else settings.WATCHLIST
+        position_size_usd = position_size_usd if position_size_usd is not None else settings.POSITION_SIZE_USD
+        max_positions = max_positions if max_positions is not None else settings.MAX_POSITIONS
 
         try:
-            positions = self.client.get_positions()
+            all_positions = self.client.get_positions()
             account = self.client.get_account()
         except Exception as e:
-            return {'timestamp': _now(), 'error': str(e), 'signals': signals, 'executed': [], 'errors': [str(e)]}
+            return {'timestamp': _now(), 'error': str(e), 'signals': [], 'executed': [], 'errors': [str(e)]}
+
+        # Crypto and stock orders/positions use different symbol formats (BTC/USD vs
+        # BTCUSD) and should be capped independently, so scope everything below to the
+        # asset class this watchlist actually represents.
+        is_crypto = any('/' in s for s in watchlist)
+        asset_class = 'crypto' if is_crypto else 'us_equity'
+        positions = [p for p in all_positions if p.get('asset_class') == asset_class]
 
         current_symbols = {p['symbol'] for p in positions}
+        # Stock positions are checked against whichever of the dual methods opened
+        # them (see scanner.py); crypto never has an entry here since it's single-
+        # method (position_methods.get() returning None naturally routes a crypto
+        # symbol through _analyze_bars' unconditional EMA branch instead).
+        held_methods = {s: self.position_methods[s] for s in current_symbols if s in self.position_methods}
+
+        # Drought fallback tracking (stock only -- never validated for crypto's
+        # volatility, see scanner.py class docstring). A position closing to zero
+        # starts the clock; any position open resets it. Calendar days, not
+        # trading days -- an approximation of scanner.py's DROUGHT_TRADING_DAYS,
+        # see DROUGHT_CALENDAR_DAYS above.
+        in_drought = False
+        if not is_crypto:
+            if not current_symbols:
+                if self.zero_since is None:
+                    self.zero_since = datetime.now(timezone.utc).date().isoformat()
+                    self._save_zero_since()
+                days_flat = (datetime.now(timezone.utc).date() - datetime.fromisoformat(self.zero_since).date()).days
+                in_drought = days_flat >= DROUGHT_CALENDAR_DAYS
+            elif self.zero_since is not None:
+                self.zero_since = None
+                self._save_zero_since()
+
+        scanner = OpportunityScanner(self.client)
+        signals = scanner.scan(watchlist, held_methods=held_methods, in_drought=in_drought)
+
         buying_power = float(account.get('buying_power', 0))
         executed = []
         errors = []
@@ -295,40 +769,58 @@ class TradingManager:
             symbol = sig['symbol']
             signal = sig['signal']
             price = float(sig.get('price', 0))
+            pos_symbol = position_symbol(symbol)
 
             if signal == 'buy':
-                if symbol in current_symbols:
+                if pos_symbol in current_symbols:
                     continue
                 pending_buys = sum(1 for e in executed if e['side'] == 'buy')
-                if len(positions) + pending_buys >= settings.MAX_POSITIONS:
-                    logger.info(f"[SCANNER] Skipping {symbol} buy — max positions ({settings.MAX_POSITIONS}) reached")
+                if len(positions) + pending_buys >= max_positions:
+                    logger.info(f"[SCANNER] Skipping {symbol} buy — max positions ({max_positions}) reached")
                     continue
-                if price <= 0 or buying_power < settings.POSITION_SIZE_USD:
+                if price <= 0 or buying_power < position_size_usd:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
                     continue
-                notional = round(settings.POSITION_SIZE_USD, 2)
+                notional = round(position_size_usd, 2)
+                client_order_id = f"scan-buy-{symbol.replace('/', '')}-{int(datetime.now().timestamp())}"
                 try:
-                    order = self.client.create_order(symbol, side='buy', notional=notional)
+                    order = self.client.create_order(symbol, side='buy', notional=notional,
+                                                       client_order_id=client_order_id)
                     qty = round(notional / price, 4)
                     buying_power -= notional
+                    if 'method' in sig:  # stocks only -- crypto's single-method EMA branch never sets this
+                        self.position_methods[pos_symbol] = sig['method']
+                        self._save_position_methods()
                     executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
                     logger.info(f"[SCANNER] BUY ~${notional:.2f} ({qty} sh) {symbol} @ ~${price:.2f} — {sig['reason']}")
                 except Exception as e:
                     errors.append(f"Buy {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to buy {symbol}: {e}")
 
-            elif signal == 'sell' and symbol in current_symbols:
+            elif signal == 'sell' and pos_symbol in current_symbols:
                 try:
-                    self.client.close_position(symbol)
+                    position = next((p for p in positions if p['symbol'] == pos_symbol), None)
+                    self.client.close_position(pos_symbol)
                     executed.append({'side': 'sell', 'symbol': symbol, 'reason': sig['reason']})
                     logger.info(f"[SCANNER] SELL {symbol} — {sig['reason']}")
+                    if position is not None:
+                        self._record_trade_outcome(pos_symbol, position)
+                    self.position_peak_prices.pop(pos_symbol, None)
+                    self._save_peak_prices()
+                    self.position_opened_at.pop(pos_symbol, None)
+                    self._save_position_opened_at()
+                    if pos_symbol in self.reentry_fired:
+                        self.reentry_fired.discard(pos_symbol)
+                        self._save_reentry_state()
+                    self.position_methods.pop(pos_symbol, None)
+                    self._save_position_methods()
                 except Exception as e:
                     errors.append(f"Sell {symbol}: {e}")
                     logger.error(f"[SCANNER] Failed to sell {symbol}: {e}")
 
         result = {
             'timestamp': _now(),
-            'watchlist': settings.WATCHLIST,
+            'watchlist': watchlist,
             'signals': signals,
             'executed': executed,
             'errors': errors,
@@ -343,11 +835,3 @@ class TradingManager:
                 logger.error(f'Failed to send trade email: {e}')
 
         return result
-
-    def build_daily_report(self) -> Dict:
-        """Build a combined account status + performance summary for the daily report email."""
-        return {
-            'timestamp': _now(),
-            'status': self.get_trading_status(),
-            'performance': self.analyze_performance()
-        }

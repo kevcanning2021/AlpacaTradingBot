@@ -8,6 +8,7 @@ ALPACA_API_KEY = os.getenv('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY', '')
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets/v2'
 DATA_BASE_URL = 'https://data.alpaca.markets/v2'
+CRYPTO_DATA_BASE_URL = 'https://data.alpaca.markets/v1beta3/crypto/us'
 
 # Market Hours (ET)
 MARKET_OPEN_HOUR = 9
@@ -16,9 +17,28 @@ MARKET_CLOSE_HOUR = 16
 MARKET_CLOSE_MINUTE = 0
 
 # Trading Parameters
-CHECK_INTERVAL_MINUTES = 60  # Check positions every 60 minutes (once per hour)
+CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
 STOP_LOSS_THRESHOLD = 0.05  # Adjust stops when position moves 5%
 REENTRY_THRESHOLD = 0.05    # Re-enter when pullback is 5%
+# Minimum time a position must have been open before a reentry can fire (both stock and
+# crypto -- unlike the stop-loss/trailing-stop/reentry-threshold splits above, this isn't
+# about volatility magnitude by asset class, it's about whether the tracked peak is old
+# enough to mean anything, which applies the same way to both). Added 2026-08-06 after a
+# real reentry fired on GOOGL ~2.5h after its original scan-buy, same trading session --
+# position_peak_prices[symbol] is set to current_price on the very first check after
+# entry, so an ordinary intraday dip right after a fresh fill looked identical to a real
+# pullback from an established peak. Backtested against 300 real daily bars across both
+# watchlists: every historical reentry in that window fired 7+ trading days after its
+# entry (soonest: NVDA at 7 days), so this gate costs zero backtested expectancy at any
+# value from a few hours up to several days -- 4h picked as comfortably clear of the
+# observed 2.5h failure while still well below the shortest real legitimate gap seen.
+MIN_REENTRY_AGE_HOURS = float(os.getenv('MIN_REENTRY_AGE_HOURS', '4'))
+# Separate from STOP_LOSS_THRESHOLD: a flat 5% pullback-from-peak triggered too often on
+# normal volatility in an intact uptrend (backtested watchlist, 90 daily bars, 2026-07-10 —
+# NVDA alone false-tripped 4x while EMA9>EMA21 and RSI<85), undercutting the RSI-85 change's
+# goal of letting winners run. 8% cut most single-name false trips while still catching real
+# breakdowns.
+TRAILING_STOP_THRESHOLD = 0.08
 
 # Timezone
 TIMEZONE = 'US/Eastern'  # Market hours are always NYSE/NASDAQ hours (ET), regardless of server location
@@ -34,16 +54,48 @@ WATCHLIST = [s.strip() for s in os.getenv('WATCHLIST', 'AAPL,MSFT,GOOGL,AMZN,NVD
 POSITION_SIZE_USD = float(os.getenv('POSITION_SIZE_USD', '1000'))  # Dollar amount per new position
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '5'))               # Max concurrent open positions
 
-# WhatsApp Notifications (via CallMeBot)
+# Crypto Scanner (runs 24/7, independent of stock market hours — see scheduler.py)
+CRYPTO_WATCHLIST = [s.strip() for s in os.getenv('CRYPTO_WATCHLIST', 'BTC/USD,ETH/USD').split(',') if s.strip()]
+# Was 60. Tightened 2026-07-16 -- a stop-loss/trailing-stop breach between checks was
+# caught late, at whatever price prevailed next, not at the threshold, and this now
+# trades real money on the production account (not just the test account). No .env
+# override on either service, so this default applies to both. 15 (not stock's 5)
+# because crypto's stop-loss/trailing-stop are already wider (15%/20%) specifically
+# to tolerate crypto's higher ordinary volatility -- doesn't need as tight a loop.
+CRYPTO_CHECK_INTERVAL_MINUTES = int(os.getenv('CRYPTO_CHECK_INTERVAL_MINUTES', '15'))
+CRYPTO_POSITION_SIZE_USD = float(os.getenv('CRYPTO_POSITION_SIZE_USD', '500'))
+CRYPTO_MAX_POSITIONS = int(os.getenv('CRYPTO_MAX_POSITIONS', '2'))
+# Separate from STOP_LOSS_THRESHOLD/TRAILING_STOP_THRESHOLD: those were backtested only
+# against the stock watchlist. Backtested against 100 real BTC/USD & ETH/USD daily bars
+# (2026-04-04 to 2026-07-12, 2026-07-13) — the stock-tuned 8% trailing-stop would have
+# tripped on ordinary volatility alone in 50-58% of all possible 20-day holding windows
+# (vs. NVDA's occasional false trip that motivated 8% for stocks in the first place).
+# 20%/15% cuts that to 8-16% of windows, a comparable reduction to what 8% achieved over
+# the stock-tuned 5% — still not zero false trips, same "cut most, not all" philosophy.
+CRYPTO_STOP_LOSS_THRESHOLD = float(os.getenv('CRYPTO_STOP_LOSS_THRESHOLD', '0.15'))
+CRYPTO_TRAILING_STOP_THRESHOLD = float(os.getenv('CRYPTO_TRAILING_STOP_THRESHOLD', '0.20'))
+# _handle_reentry computes the identical peak-relative pullback statistic as the trailing
+# stop above (just advisory instead of closing) — REENTRY_THRESHOLD (5%, stock-tuned) was
+# the one asset-class-sensitive threshold in trader.py that hadn't gotten a crypto split
+# yet, which mattered as of 2026-07-14 once crypto started trading on the production
+# account. IMPORTANT: must stay strictly below CRYPTO_TRAILING_STOP_THRESHOLD, not equal
+# to it — check_positions() runs stop-loss -> trailing-stop -> re-entry in that order and
+# skips re-entry once a position is closed, so setting them equal (an oversight in the
+# first version of this fix, same day) means the trailing stop always closes the position
+# at the same pullback level before re-entry can ever fire, making the advisory dead code.
+# 0.125 preserves the same ratio as the stock config (REENTRY_THRESHOLD/TRAILING_STOP_THRESHOLD
+# = 5%/8% = 0.625, applied to crypto's 20%: 0.625 * 0.20 = 0.125) rather than a new guess.
+CRYPTO_REENTRY_THRESHOLD = float(os.getenv('CRYPTO_REENTRY_THRESHOLD', '0.125'))
+
+# WhatsApp Notifications (via CallMeBot) -- kept for reference/rollback, but the
+# live notifier switched to Telegram 2026-08-04 after CallMeBot's free quota ran
+# out. WHATSAPP_ENABLED should stay false on every deployed .env going forward.
 WHATSAPP_ENABLED = os.getenv('WHATSAPP_ENABLED', 'false').lower() == 'true'
 WHATSAPP_PHONE = os.getenv('WHATSAPP_PHONE', '')    # International format without +, e.g. 27831234567
 WHATSAPP_APIKEY = os.getenv('WHATSAPP_APIKEY', '')  # API key received from CallMeBot
 
-# Email Notifications
-EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
-EMAIL_SMTP_HOST = os.getenv('EMAIL_SMTP_HOST', 'smtp.gmail.com')
-EMAIL_SMTP_PORT = int(os.getenv('EMAIL_SMTP_PORT', '587'))
-EMAIL_SMTP_USER = os.getenv('EMAIL_SMTP_USER', '')
-EMAIL_SMTP_PASSWORD = os.getenv('EMAIL_SMTP_PASSWORD', '')
-EMAIL_FROM = os.getenv('EMAIL_FROM', '')
-EMAIL_TO = [e.strip() for e in os.getenv('EMAIL_TO', '').split(',') if e.strip()]
+# Telegram Notifications (via the Telegram Bot API) -- the active notifier as of
+# 2026-08-04. Free, no message quota.
+TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true'
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')  # from @BotFather
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')      # your personal chat ID with the bot

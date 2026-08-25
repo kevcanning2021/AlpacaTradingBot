@@ -1,0 +1,399 @@
+"""Standalone VPS strategy check: runs hourly to verify the live scanner is
+producing sane signals, and once a day re-backtests the current thresholds
+against fresh real bars — an alert-only tool in service of the project goal
+(iteratively refine the strategy from real data), not a trading job.
+
+Meant to run via crontab hourly on the VPS itself, independent of any
+Claude Code session — same reasoning as watchdog.py: the existing hourly
+"Strategy Review" cloud routine can't reach data.alpaca.markets at all
+(persistently network-blocked in that sandbox), so it can never actually
+backtest. Only the VPS (and a dev/interactive session) has real bar access.
+
+Two checks, both alert-only via Telegram (never trades, never edits
+thresholds) with the same cooldown/state pattern as watchdog.py:
+
+- Hourly: re-run the live scanner against the whole watchlist. Flags a
+  data outage (too few bars / scanner error) or a SELL signal that's
+  persisted for 2+ consecutive hourly checks on a symbol still held
+  (the scheduler should have closed it well before then).
+- Once/day, after market close: re-backtest each watchlist's live thresholds
+  (read from scanner.py, so this never drifts from what's actually deployed)
+  against a fresh 300-bar window per symbol — Bollinger+EMA9/21 dual for
+  stocks, Donchian breakout (as of 2026-08-24, see scanner.py's
+  DONCHIAN_BREAKOUT_PERIOD docstring) for crypto. Flags if aggregate
+  expectancy has gone negative, if it's become outlier-driven (a
+  leave-one-symbol-out flips sign — see project Lesson #10), or if it's
+  dropped more than half since the last recorded run. Note for crypto
+  specifically: a negative-expectancy flag here on a 300-bar/~10-month
+  window is expected some of the time by design (trend-following has a
+  ~40% win rate and most short windows are flat-to-negative, carried by
+  rare large trending moves) — not automatically a sign something broke,
+  see scanner.py for the full reasoning before treating it as an incident.
+- Same daily run, once >= FORWARD_TEST_MIN_TRADES real closed trades
+  exist (trader.py persists every closed trade's realized P&L to
+  trade_history.json — see its _record_trade_outcome): compares the
+  live/forward-test win rate and expectancy against this same backtest.
+  Flags if the real results are negative, or less than half the
+  backtest's predicted expectancy — the actual "does live match what we
+  backtested" check the project's goal (STRATEGY.md) has been waiting on
+  since before real trades existed to compare against.
+"""
+import json
+import os
+from datetime import datetime, timezone
+
+from alpaca_client import AlpacaClient, position_symbol
+from scanner import OpportunityScanner, _compute_ema, _compute_rsi, _compute_bollinger
+from telegram_notifier import TelegramNotifier
+from config import settings
+
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_check_state.json')
+TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
+HEALTH_ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
+BACKTEST_ALERT_COOLDOWN_SECONDS = 24 * 60 * 60
+BACKTEST_LOOKBACK_BARS = 300
+STUCK_SELL_THRESHOLD = 2  # consecutive hourly checks with an unclosed SELL signal
+FORWARD_TEST_MIN_TRADES = 10  # below this, real trade count is too thin to compare against the backtest at all
+
+
+def load_trade_history():
+    if os.path.exists(TRADE_HISTORY_FILE):
+        try:
+            with open(TRADE_HISTORY_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def load_position_methods():
+    """Read-only load of trader.py's position_method_state.json -- a separate
+    process (this one), so it never writes this file, only reads whatever the
+    live trading service last persisted. Used so the hourly signal-health check
+    below evaluates each held stock against the one method that actually opened
+    it, same as scan_and_execute() does live -- otherwise a Bollinger-opened
+    position could get flagged as a "stuck sell" off an EMA signal it was never
+    entered under, or vice versa."""
+    if os.path.exists(POSITION_METHOD_FILE):
+        try:
+            with open(POSITION_METHOD_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _forward_test_stats(trade_history, asset_class):
+    """Realized win rate/expectancy from trader.py's persisted trade_history.json
+    (real closed trades only), split by asset class to match how the backtest is
+    split. Returns trade_count always (so progress toward FORWARD_TEST_MIN_TRADES is
+    visible even before there's enough to compare), plus expectancy/win_rate once
+    the threshold is met."""
+    trades = [t for t in trade_history if t.get('asset_class') == asset_class and t.get('pnl_pct') is not None]
+    stats = {'trade_count': len(trades), 'ready': len(trades) >= FORWARD_TEST_MIN_TRADES}
+    if stats['ready']:
+        pcts = [t['pnl_pct'] for t in trades]
+        stats['expectancy_pct'] = (sum(pcts) / len(pcts)) * 100
+        stats['win_rate_pct'] = (sum(1 for p in pcts if p > 0) / len(pcts)) * 100
+    return stats
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {'active_alerts': {}, 'stuck_sell_counts': {}, 'last_backtest_date': None, 'backtest_history': []}
+
+
+def save_state(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+
+def check_signal_health(client, watchlist, state, held_symbols):
+    scanner = OpportunityScanner(client)
+    held_methods = {s: m for s, m in load_position_methods().items() if s in held_symbols}
+    results = scanner.scan(watchlist, held_methods=held_methods)
+    issues = []
+    stuck = state.setdefault('stuck_sell_counts', {})
+    seen = set()
+
+    for r in results:
+        symbol = r['symbol']
+        seen.add(symbol)
+        if r['signal'] == 'error':
+            issues.append((f'data_error:{symbol}', f'Scanner error on {symbol}: {r["reason"]}'))
+            stuck.pop(symbol, None)
+            continue
+        if r['reason'] == 'insufficient history':
+            issues.append((f'data_gap:{symbol}', f'Only got insufficient bar history for {symbol} — possible data outage'))
+            stuck.pop(symbol, None)
+            continue
+
+        held = position_symbol(symbol) in held_symbols
+        if r['signal'] == 'sell' and held:
+            stuck[symbol] = stuck.get(symbol, 0) + 1
+            if stuck[symbol] >= STUCK_SELL_THRESHOLD:
+                issues.append((
+                    f'stuck_sell:{symbol}',
+                    f'{symbol} has shown a SELL signal for {stuck[symbol]} consecutive hourly checks '
+                    f'while still held ({r["reason"]}) — scheduler may not be closing it'
+                ))
+        else:
+            stuck.pop(symbol, None)
+
+    for symbol in list(stuck.keys()):
+        if symbol not in seen:
+            stuck.pop(symbol)
+
+    return issues
+
+
+def _simulate_trades_dual(bars, oversold_rsi, sell_rsi_min, period, num_std, buy_rsi_max):
+    """Stock re-backtest, matching OpportunityScanner._analyze_bars' stock
+    branch exactly as of 2026-08-17:
+    Bollinger Band mean-reversion and EMA9/21 crossover run as two independent
+    entry sources on the same symbol -- whichever fires first (Bollinger
+    preferred on a same-day tie, matching scanner.py) opens the position, and
+    that same method's own exit rule governs it (never a mixed rule). Replaced
+    the single-Bollinger-only _simulate_trades_bollinger this superseded when
+    Kevin asked for more real trade frequency without diluting either edge --
+    see STRATEGY.md and scanner.py's class docstring for the backtest.
+
+    Deliberately does NOT model the 2026-08-18 drought fallback
+    (BOLLINGER_STD_FALLBACK) -- that's a portfolio-level rule (triggers once
+    the whole 7-symbol watchlist has sat at zero open positions for N days),
+    but this function walks one symbol in isolation with no visibility into
+    the other six. Modeling it properly would need the full walk-forward
+    portfolio simulation this function was never built to be, for a rule
+    that already only has n=1 real backtested occurrence -- not worth the
+    complexity. This daily drift-check will therefore slightly underestimate
+    live expectancy on the rare day a fallback trade fires; a real forward-
+    test divergence from that alone would be a false alarm, worth remembering
+    if `forward_test_diverged` ever fires shortly after one."""
+    closes = [float(b['c']) for b in bars]
+    mid, upper, lower = _compute_bollinger(closes, period, num_std)
+    ema9 = _compute_ema(closes, 9)
+    ema21 = _compute_ema(closes, 21)
+    ema_offset9 = len(closes) - len(ema9)
+    ema_offset21 = len(closes) - len(ema21)
+    trades = []
+    in_position = False
+    entry_price = 0.0
+    method = None
+
+    for i in range(period, len(closes)):
+        if lower[i] is None or lower[i - 1] is None or mid[i] is None:
+            continue
+        rsi = _compute_rsi(closes[max(0, i - 40):i + 1])
+        price = closes[i]
+        prev_price = closes[i - 1]
+
+        if not in_position:
+            if prev_price < lower[i - 1] and price > lower[i] and rsi < oversold_rsi:
+                in_position, method, entry_price = True, 'bollinger', price
+                continue
+            i9, i21 = i - ema_offset9, i - ema_offset21
+            if i9 >= 1 and i21 >= 1:
+                prev_diff = ema9[i9 - 1] - ema21[i21 - 1]
+                curr_diff = ema9[i9] - ema21[i21]
+                if prev_diff < 0 and curr_diff > 0 and rsi < buy_rsi_max:
+                    in_position, method, entry_price = True, 'ema', price
+        else:
+            if method == 'bollinger':
+                exit_signal = price >= mid[i] or rsi > sell_rsi_min
+            else:
+                i9, i21 = i - ema_offset9, i - ema_offset21
+                prev_diff = ema9[i9 - 1] - ema21[i21 - 1]
+                curr_diff = ema9[i9] - ema21[i21]
+                exit_signal = (prev_diff > 0 and curr_diff < 0) or rsi > sell_rsi_min
+            if exit_signal:
+                trades.append((price - entry_price) / entry_price)
+                in_position, method = False, None
+
+    return trades
+
+
+def _simulate_trades_donchian(bars, breakout_period, exit_period, stop_loss_pct, trailing_stop_pct):
+    """Crypto's re-backtest, updated 2026-08-24 alongside the live scanner swap
+    from EMA9/21 to Donchian breakout -- without this, the daily drift-check
+    would keep validating live crypto results against a strategy that's no
+    longer running, exactly the stale-reimplementation gap already documented
+    for the stock side (project Lesson #22). Includes the stop-loss/trailing-
+    stop overlay (unlike _simulate_trades_dual above, which only models the
+    raw signal exit) since Donchian's validation explicitly
+    relied on that overlay -- see scanner.py's DONCHIAN_BREAKOUT_PERIOD
+    docstring for the full backtest this reproduces."""
+    closes = [float(b['c']) for b in bars]
+    trades = []
+    in_position = False
+    entry_price = peak_price = 0.0
+
+    for i in range(breakout_period + 1, len(closes)):
+        price = closes[i]
+        if not in_position:
+            recent_high = max(closes[i - breakout_period:i])
+            if price >= recent_high:
+                in_position, entry_price, peak_price = True, price, price
+        else:
+            peak_price = max(peak_price, price)
+            exit_price = None
+            if stop_loss_pct and price <= entry_price * (1 - stop_loss_pct):
+                exit_price = price
+            elif trailing_stop_pct and price <= peak_price * (1 - trailing_stop_pct):
+                exit_price = price
+            elif i >= exit_period + 1 and price <= min(closes[i - exit_period:i]):
+                exit_price = price
+            if exit_price is not None:
+                trades.append((exit_price - entry_price) / entry_price)
+                in_position = False
+
+    return trades
+
+
+def _backtest_watchlist(client, watchlist):
+    bars_by_symbol = client.get_bars_multi(watchlist, limit=BACKTEST_LOOKBACK_BARS)
+    per_symbol = {}
+    for symbol in watchlist:
+        bars = bars_by_symbol.get(symbol, [])
+        if '/' in symbol:
+            per_symbol[symbol] = _simulate_trades_donchian(
+                bars, OpportunityScanner.DONCHIAN_BREAKOUT_PERIOD, OpportunityScanner.DONCHIAN_EXIT_PERIOD,
+                settings.CRYPTO_STOP_LOSS_THRESHOLD, settings.CRYPTO_TRAILING_STOP_THRESHOLD)
+        else:
+            per_symbol[symbol] = _simulate_trades_dual(
+                bars, OpportunityScanner.BOLLINGER_OVERSOLD_RSI, OpportunityScanner.SELL_RSI_MIN,
+                OpportunityScanner.BOLLINGER_PERIOD, OpportunityScanner.BOLLINGER_STD, OpportunityScanner.BUY_RSI_MAX)
+
+    all_trades = [t for trades in per_symbol.values() for t in trades]
+    if not all_trades:
+        return None
+
+    expectancy_pct = (sum(all_trades) / len(all_trades)) * 100
+    win_rate_pct = (sum(1 for t in all_trades if t > 0) / len(all_trades)) * 100
+    leave_one_out = {}
+    for excluded in watchlist:
+        remaining = [t for sym, ts in per_symbol.items() if sym != excluded for t in ts]
+        if remaining:
+            leave_one_out[excluded] = (sum(remaining) / len(remaining)) * 100
+
+    return {
+        'trade_count': len(all_trades),
+        'expectancy_pct': expectancy_pct,
+        'win_rate_pct': win_rate_pct,
+        'leave_one_out': leave_one_out,
+    }
+
+
+def run_daily_backtests(client, state):
+    issues = []
+    history = state.setdefault('backtest_history', [])
+    today = datetime.now(timezone.utc).date().isoformat()
+    trade_history = load_trade_history()
+
+    for label, watchlist, asset_class in (
+        ('stock', settings.WATCHLIST, 'us_equity'),
+        ('crypto', settings.CRYPTO_WATCHLIST, 'crypto'),
+    ):
+        if not watchlist:
+            continue
+        result = _backtest_watchlist(client, watchlist)
+        if result is None:
+            continue
+        result['label'] = label
+        result['date'] = today
+
+        aggregate_positive = result['expectancy_pct'] > 0
+        if not aggregate_positive:
+            issues.append((
+                f'backtest_negative:{label}',
+                f'{label} backtest expectancy went negative: {result["expectancy_pct"]:.3f}%/trade '
+                f'over {result["trade_count"]} trades ({BACKTEST_LOOKBACK_BARS}-bar window)'
+            ))
+
+        flipped = [sym for sym, exp in result['leave_one_out'].items() if (exp > 0) != aggregate_positive]
+        if flipped and aggregate_positive:
+            issues.append((
+                f'backtest_outlier:{label}',
+                f'{label} backtest aggregate (+{result["expectancy_pct"]:.3f}%/trade) is outlier-driven — '
+                f'flips sign excluding: {", ".join(flipped)}'
+            ))
+
+        prior = next((h for h in reversed(history) if h.get('label') == label), None)
+        if prior and prior['expectancy_pct'] > 0 and result['expectancy_pct'] < prior['expectancy_pct'] * 0.5:
+            issues.append((
+                f'backtest_degraded:{label}',
+                f'{label} backtest expectancy dropped from {prior["expectancy_pct"]:.3f}%/trade '
+                f'({prior["date"]}) to {result["expectancy_pct"]:.3f}%/trade — more than 50% weaker'
+            ))
+
+        # Forward test: compare real closed-trade results against this same backtest,
+        # once there's enough real trades to mean anything (per-project convention,
+        # see STRATEGY.md -- fewer than ~10 closed trades is noise, not signal).
+        forward = _forward_test_stats(trade_history, asset_class)
+        result['forward_test'] = forward
+        if forward['ready']:
+            if forward['expectancy_pct'] <= 0:
+                issues.append((
+                    f'forward_test_negative:{label}',
+                    f'{label} LIVE forward-test expectancy is negative: {forward["expectancy_pct"]:+.3f}%/trade '
+                    f'over {forward["trade_count"]} real closed trades (backtest predicts '
+                    f'{result["expectancy_pct"]:+.3f}%/trade) — worth a closer look'
+                ))
+            elif aggregate_positive and forward['expectancy_pct'] < result['expectancy_pct'] * 0.5:
+                issues.append((
+                    f'forward_test_diverged:{label}',
+                    f'{label} LIVE forward-test expectancy ({forward["expectancy_pct"]:+.3f}%/trade, '
+                    f'{forward["trade_count"]} real trades) is less than half the backtest prediction '
+                    f'({result["expectancy_pct"]:+.3f}%/trade) — may be worth revisiting thresholds'
+                ))
+
+        history.append(result)
+
+    state['backtest_history'] = history[-60:]  # ~2 months of daily runs
+    state['last_backtest_date'] = today
+    return issues
+
+
+def main():
+    state = load_state()
+    active = state.setdefault('active_alerts', {})
+    now = datetime.now(timezone.utc)
+
+    client = AlpacaClient()
+    held_symbols = {p['symbol'] for p in client.get_positions()}
+    watchlist = settings.WATCHLIST + settings.CRYPTO_WATCHLIST
+
+    all_issues = check_signal_health(client, watchlist, state, held_symbols)
+
+    # Once/day, after market close (16:00 ET) with a comfortable buffer for the
+    # daily bar to settle — 21:00 UTC covers ET's -4/-5 offset across DST.
+    if state.get('last_backtest_date') != now.date().isoformat() and now.hour >= 21:
+        all_issues += run_daily_backtests(client, state)
+
+    current_keys = {key for key, _ in all_issues}
+    messages = []
+    for key, msg in all_issues:
+        cooldown = BACKTEST_ALERT_COOLDOWN_SECONDS if key.startswith('backtest_') else HEALTH_ALERT_COOLDOWN_SECONDS
+        last_sent = active.get(key)
+        if last_sent is None:
+            messages.append(msg)
+            active[key] = now.isoformat()
+        elif (now - datetime.fromisoformat(last_sent)).total_seconds() > cooldown:
+            messages.append(f'[STILL ACTIVE] {msg}')
+            active[key] = now.isoformat()
+
+    for key in list(active.keys()):
+        if key not in current_keys:
+            del active[key]
+
+    if messages:
+        TelegramNotifier().send('AlpacaTradingBot Strategy Check', '\n\n'.join(messages))
+
+    state['active_alerts'] = active
+    save_state(state)
+
+
+if __name__ == '__main__':
+    main()

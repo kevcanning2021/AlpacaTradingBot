@@ -1,35 +1,44 @@
-import urllib.request
-import urllib.parse
+import json
 import logging
+import urllib.request
+import urllib.error
 from typing import Tuple
 from config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class WhatsAppNotifier:
-    """WhatsApp notifier via CallMeBot API (drop-in replacement for EmailNotifier)."""
+class TelegramNotifier:
+    """Telegram notifier via the Telegram Bot API -- drop-in replacement for
+    WhatsAppNotifier (same send()/build_*_email() interface), switched to 2026-08-04
+    after CallMeBot's free WhatsApp quota ran out. Free, no message limits."""
 
     def __init__(self):
-        self.enabled = settings.WHATSAPP_ENABLED
-        self.phone = settings.WHATSAPP_PHONE
-        self.apikey = settings.WHATSAPP_APIKEY
+        self.enabled = settings.TELEGRAM_ENABLED
+        self.bot_token = settings.TELEGRAM_BOT_TOKEN
+        self.chat_id = settings.TELEGRAM_CHAT_ID
 
     def send(self, subject: str, body: str) -> bool:
         if not self.enabled:
             return False
-        if not self.phone or not self.apikey:
-            raise ValueError('WhatsApp notifier is enabled but WHATSAPP_PHONE or WHATSAPP_APIKEY is missing.')
+        if not self.bot_token or not self.chat_id:
+            raise ValueError('Telegram notifier is enabled but TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing.')
 
-        text = f"*{subject}*\n{body}"
-        encoded = urllib.parse.quote(text)
-        url = f'https://api.callmebot.com/whatsapp.php?phone={self.phone}&text={encoded}&apikey={self.apikey}'
+        # Plain text, no parse_mode -- Telegram's Markdown/HTML modes reject the
+        # whole message on unescaped special characters (prices, symbols like
+        # BTC/USD can contain them), which would silently drop real alerts.
+        text = f"{subject}\n\n{body}"
+        url = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
+        payload = json.dumps({'chat_id': self.chat_id, 'text': text}).encode()
 
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            status = resp.status
-            if status != 200:
-                raise Exception(f'CallMeBot returned HTTP {status}')
+        req = urllib.request.Request(url, data=payload, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                if resp.status != 200:
+                    raise Exception(f'Telegram returned HTTP {resp.status}')
+        except urllib.error.HTTPError as e:
+            raise Exception(f'Telegram returned HTTP {e.code}: {e.read().decode(errors="replace")}')
 
         return True
 

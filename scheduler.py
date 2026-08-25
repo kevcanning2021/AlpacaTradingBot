@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Dict
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
 import pytz
 from trader import TradingManager
 from config.settings import (
@@ -12,7 +11,11 @@ from config.settings import (
     MARKET_OPEN_MINUTE,
     MARKET_CLOSE_HOUR,
     MARKET_CLOSE_MINUTE,
-    TIMEZONE
+    TIMEZONE,
+    CRYPTO_WATCHLIST,
+    CRYPTO_CHECK_INTERVAL_MINUTES,
+    CRYPTO_POSITION_SIZE_USD,
+    CRYPTO_MAX_POSITIONS,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -71,8 +74,14 @@ class MarketHoursScheduler:
             performance = self.trading_manager.analyze_performance()
             report['performance'] = performance
 
-            strategy_report = self.trading_manager.adjust_strategy()
-            report['strategy_adjustment'] = strategy_report
+            # adjust_strategy() (win/loss-streak + equity-swing driven mutation of
+            # STOP_LOSS_THRESHOLD/REENTRY_THRESHOLD) is deliberately NOT called here as
+            # of 2026-07-16 -- a full-system backtest (real entries/exits/stops, 300
+            # daily bars, ~14 months, test-account sizing) found it underperformed
+            # fixed thresholds (+6.66% vs +7.65% total return) while firing often (17
+            # threshold changes across 25 closed trades). See STRATEGY.md "Automated
+            # monitoring" / trader.py: adjust_strategy() docstring. Method left intact,
+            # not deleted -- Kevin may revisit with a more robust multi-window backtest.
 
             # Keep only last 100 checks
             if len(self.check_history) > 100:
@@ -84,30 +93,47 @@ class MarketHoursScheduler:
                 for action in report['actions_taken']:
                     logger.info(f"  - {action.get('action')}: {action.get('symbol')} - {action.get('recommendation')}")
 
-            if strategy_report.get('changes_made'):
-                logger.info(f"Strategy adjustments applied: {strategy_report.get('changes_made')}")
-
             if report.get('errors'):
                 logger.warning(f"Errors: {report['errors']}")
 
         except Exception as e:
             logger.error(f"Error in position check job: {e}")
 
-    def _send_daily_report_job(self):
-        """Job that emails a daily account status report."""
+    def _check_crypto_job(self):
+        """Job that runs every CRYPTO_CHECK_INTERVAL_MINUTES, around the clock — crypto
+        trades 24/7 so this job is not gated by _is_market_open()."""
         logger.info("=" * 60)
-        logger.info("Sending daily status report...")
+        logger.info("Starting crypto position check and opportunity scan...")
 
         try:
-            report = self.trading_manager.build_daily_report()
-            if self.trading_manager.notifier.enabled:
-                subject, body = self.trading_manager.notifier.build_daily_report_email(report)
-                self.trading_manager.notifier.send(subject, body)
-                logger.info("Daily status report email sent successfully")
-            else:
-                logger.info("Email notifications disabled; skipping daily report email")
+            scan_report = self.trading_manager.scan_and_execute(
+                CRYPTO_WATCHLIST, CRYPTO_POSITION_SIZE_USD, CRYPTO_MAX_POSITIONS
+            )
+            if scan_report.get('executed'):
+                logger.info(f"Crypto scanner executed {len(scan_report['executed'])} trade(s):")
+                for trade in scan_report['executed']:
+                    qty_str = f"{trade['qty']} " if trade.get('qty') else ''
+                    logger.info(f"  {trade['side'].upper()} {qty_str}{trade['symbol']} — {trade['reason']}")
+            if scan_report.get('errors'):
+                logger.warning(f"Crypto scanner errors: {scan_report['errors']}")
+
+            # Apply stop-loss/trailing-stop/re-entry logic to crypto positions only —
+            # this job isn't market-hours gated, but stock positions already get
+            # checked by the market-hours job and must not be touched here (see
+            # check_positions() docstring for why an unscoped call is unsafe).
+            report = self.trading_manager.check_positions(asset_class='crypto')
+            report['scan_report'] = scan_report
+
+            logger.info(f"Crypto check completed at {report.get('timestamp')}")
+            if report.get('actions_taken'):
+                logger.info(f"Actions: {len(report['actions_taken'])} recommendation(s)")
+                for action in report['actions_taken']:
+                    logger.info(f"  - {action.get('action')}: {action.get('symbol')} - {action.get('recommendation')}")
+            if report.get('errors'):
+                logger.warning(f"Errors: {report['errors']}")
+
         except Exception as e:
-            logger.error(f"Error sending daily report: {e}")
+            logger.error(f"Error in crypto position check job: {e}")
 
     def start(self):
         """Start the market hours scheduler"""
@@ -127,17 +153,12 @@ class MarketHoursScheduler:
                 replace_existing=True
             )
 
-            daily_trigger = CronTrigger(
-                hour=MARKET_OPEN_HOUR,
-                minute=MARKET_OPEN_MINUTE,
-                day_of_week='mon-fri',
-                timezone=TIMEZONE
-            )
+            crypto_trigger = IntervalTrigger(minutes=CRYPTO_CHECK_INTERVAL_MINUTES, timezone=TIMEZONE)
             self.scheduler.add_job(
-                self._send_daily_report_job,
-                trigger=daily_trigger,
-                id='daily_report',
-                name='Daily Status Report Email',
+                self._check_crypto_job,
+                trigger=crypto_trigger,
+                id='crypto_position_check',
+                name='24/7 Crypto Position Check',
                 replace_existing=True
             )
 
@@ -147,7 +168,7 @@ class MarketHoursScheduler:
             logger.info(f"Market Hours Scheduler started")
             logger.info(f"Market hours: {MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} - {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} ET")
             logger.info(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes (Mon-Fri only)")
-            logger.info(f"Daily report: at market open ({MARKET_OPEN_HOUR:02d}:{MARKET_OPEN_MINUTE:02d} {TIMEZONE}, Mon-Fri)")
+            logger.info(f"Crypto watchlist: {CRYPTO_WATCHLIST} — checked every {CRYPTO_CHECK_INTERVAL_MINUTES} minutes, 24/7")
             logger.info("=" * 60)
         
         except Exception as e:
