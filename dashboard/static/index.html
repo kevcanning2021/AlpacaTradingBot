@@ -25,6 +25,11 @@
     <button id="logout-btn">Log out</button>
   </header>
 
+  <section class="card">
+    <h2>Agents</h2>
+    <div id="agents-overview" class="agents-overview"></div>
+  </section>
+
   <section id="summary-card" class="card"></section>
 
   <section class="card">
@@ -39,6 +44,15 @@
     <h2>Recent Orders</h2>
     <table id="orders-table">
       <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th>Filled Price</th><th>Submitted</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Research Agent Decisions</h2>
+    <p class="hint">Reviews Test-account buy signals, can veto — click a row for the full reasoning.</p>
+    <table id="research-agent-table">
+      <thead><tr><th>Time</th><th>Symbol</th><th>Veto</th><th>Confidence</th><th>Risk Flags</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>

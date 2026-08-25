@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 
 from dashboard import auth, config
-from dashboard.accounts import ACCOUNTS, get_client
+from dashboard.accounts import ACCOUNTS, AGENTS_OVERVIEW, get_client
 from dashboard.cache import get_or_fetch
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ STATIC_DIR = Path(__file__).parent / 'static'
 SUMMARY_TTL = 10
 POSITIONS_TTL = 10
 ORDERS_TTL = 30
+AGENTS_OVERVIEW_TTL = 10
+RESEARCH_AGENT_DECISIONS_TTL = 10
+RESEARCH_AGENT_DECISIONS_LIMIT = 50
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -79,8 +83,12 @@ async def account_summary(request):
     try:
         data = get_or_fetch(account_id, 'summary', SUMMARY_TTL, client.get_account)
     except Exception as e:
+        # The real message (not just a generic "upstream fetch failed") matters here --
+        # this is the same signal that caught Production's dead API key by hand earlier
+        # (a 401 from Alpaca), now surfaced automatically via the agents-overview health
+        # check below instead of requiring an SSH session to notice.
         logger.error(f"[dashboard] Failed to fetch summary for {account_id}: {e}")
-        return JSONResponse({'error': 'upstream fetch failed'}, status_code=502)
+        return JSONResponse({'error': str(e)}, status_code=502)
     return JSONResponse({
         'equity': data.get('equity'),
         'cash': data.get('cash'),
@@ -136,6 +144,72 @@ async def account_orders(request):
     } for o in data])
 
 
+def _account_health(account_id: str):
+    """True/error-message for one Alpaca-backed agent -- reuses the same
+    cached get_account() fetch account_summary() already makes (same TTL,
+    same cache key) so this costs no extra API call when both are hit in
+    the same poll cycle."""
+    client = get_client(account_id)
+    if client is None:
+        return {'healthy': False, 'detail': 'no account configured'}
+    try:
+        get_or_fetch(account_id, 'summary', SUMMARY_TTL, client.get_account)
+        return {'healthy': True, 'detail': None}
+    except Exception as e:
+        return {'healthy': False, 'detail': str(e)}
+
+
+def _research_agent_health():
+    """'Healthy' here means 'the decisions file is readable,' not 'the
+    agent is currently active' -- a veto call only fires on a rare real buy
+    signal (see agents/research_agent.py), so a quiet file is normal, not a
+    fault, unlike a regular heartbeat. detail carries the most recent
+    decision's timestamp/symbol when available."""
+    try:
+        with open(config.RESEARCH_AGENT_DECISIONS_PATH) as f:
+            decisions = json.load(f)
+    except FileNotFoundError:
+        return {'healthy': True, 'detail': 'no decisions logged yet'}
+    except (json.JSONDecodeError, OSError) as e:
+        return {'healthy': False, 'detail': str(e)}
+    flat = [dict(d, symbol=symbol) for symbol, entries in decisions.items() for d in entries]
+    if not flat:
+        return {'healthy': True, 'detail': 'no decisions logged yet'}
+    flat.sort(key=lambda d: d.get('timestamp') or '', reverse=True)
+    latest = flat[0]
+    return {'healthy': True, 'detail': f"{len(flat)} logged, most recent: {latest['symbol']} at {latest.get('timestamp', 'unknown time')}"}
+
+
+async def agents_overview(request):
+    def _health_for(agent):
+        if not agent['monitored']:
+            return {'healthy': None, 'detail': 'not yet monitored'}
+        if agent['id'] == 'research_agent':
+            return get_or_fetch('research_agent', 'health', AGENTS_OVERVIEW_TTL, _research_agent_health)
+        return get_or_fetch(agent['id'], 'health', AGENTS_OVERVIEW_TTL, lambda: _account_health(agent['id']))
+
+    return JSONResponse([dict(agent, health=_health_for(agent)) for agent in AGENTS_OVERVIEW])
+
+
+async def research_agent_decisions(request):
+    def _load():
+        try:
+            with open(config.RESEARCH_AGENT_DECISIONS_PATH) as f:
+                decisions = json.load(f)
+        except FileNotFoundError:
+            return []
+        flat = [dict(d, symbol=symbol) for symbol, entries in decisions.items() for d in entries]
+        flat.sort(key=lambda d: d.get('timestamp') or '', reverse=True)
+        return flat[:RESEARCH_AGENT_DECISIONS_LIMIT]
+
+    try:
+        data = get_or_fetch('research_agent', 'decisions', RESEARCH_AGENT_DECISIONS_TTL, _load)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"[dashboard] Failed to read research agent decisions: {e}")
+        return JSONResponse({'error': str(e)}, status_code=502)
+    return JSONResponse(data)
+
+
 async def index(request):
     return FileResponse(STATIC_DIR / 'index.html')
 
@@ -148,6 +222,8 @@ routes = [
     Route('/api/accounts/{account_id}/summary', account_summary),
     Route('/api/accounts/{account_id}/positions', account_positions),
     Route('/api/accounts/{account_id}/orders', account_orders),
+    Route('/api/agents-overview', agents_overview),
+    Route('/api/research-agent/decisions', research_agent_decisions),
     Mount('/static', app=StaticFiles(directory=str(STATIC_DIR)), name='static'),
 ]
 

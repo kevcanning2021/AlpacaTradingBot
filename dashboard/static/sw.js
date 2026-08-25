@@ -1,4 +1,5 @@
-const SHELL_CACHE = 'shell-v1';
+// Bumped v1 -> v2: style.css/app.js changed (agents overview + research agent panel).
+const SHELL_CACHE = 'shell-v2';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

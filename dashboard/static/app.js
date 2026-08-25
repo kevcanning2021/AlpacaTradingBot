@@ -52,21 +52,65 @@ function money(v) {
 }
 
 async function refresh() {
-  if (!currentAccount) return;
   const banner = document.getElementById('offline-banner');
   try {
-    const [summaryRes, positionsRes, ordersRes] = await Promise.all([
-      api(`/api/accounts/${currentAccount}/summary`),
-      api(`/api/accounts/${currentAccount}/positions`),
-      api(`/api/accounts/${currentAccount}/orders`),
-    ]);
-    renderSummary(await summaryRes.json());
-    renderPositions(await positionsRes.json());
-    renderOrders(await ordersRes.json());
+    const calls = [
+      api('/api/agents-overview').then((r) => r.json()).then(renderAgentsOverview),
+      api('/api/research-agent/decisions').then((r) => r.json()).then(renderResearchAgentDecisions),
+    ];
+    if (currentAccount) {
+      calls.push(
+        api(`/api/accounts/${currentAccount}/summary`).then((r) => r.json()).then(renderSummary),
+        api(`/api/accounts/${currentAccount}/positions`).then((r) => r.json()).then(renderPositions),
+        api(`/api/accounts/${currentAccount}/orders`).then((r) => r.json()).then(renderOrders),
+      );
+    }
+    await Promise.all(calls);
     banner.classList.add('hidden');
   } catch (e) {
     banner.classList.remove('hidden');
   }
+}
+
+function healthBadge(health) {
+  if (!health || health.healthy === null) return '<span class="badge badge-gray">not monitored</span>';
+  return health.healthy
+    ? '<span class="badge badge-green">ok</span>'
+    : '<span class="badge badge-red" title="' + (health.detail || '').replace(/"/g, '&quot;') + '">error</span>';
+}
+
+function renderAgentsOverview(agents) {
+  const el = document.getElementById('agents-overview');
+  el.innerHTML = agents.map((a) => `
+    <div class="agent-row">
+      <div class="agent-row-top">
+        <span class="agent-label">${a.label}</span>
+        ${healthBadge(a.health)}
+      </div>
+      <div class="agent-role">${a.role}</div>
+      ${a.health && a.health.detail && a.health.healthy !== false ? `<div class="agent-detail">${a.health.detail}</div>` : ''}
+    </div>`).join('');
+}
+
+function renderResearchAgentDecisions(decisions) {
+  const tbody = document.querySelector('#research-agent-table tbody');
+  tbody.innerHTML = '';
+  decisions.forEach((d) => {
+    const row = document.createElement('tr');
+    row.className = 'expandable';
+    const vetoBadge = d.veto ? '<span class="badge badge-red">veto</span>' : '<span class="badge badge-green">clear</span>';
+    const conf = (d.confidence === null || d.confidence === undefined) ? '-' : d.confidence.toFixed(2);
+    const flags = (d.risk_flags || []).map((f) => `<span class="tag">${f}</span>`).join('');
+    row.innerHTML = `<td>${(d.timestamp || '').replace('T', ' ').slice(0, 19)}</td><td>${d.symbol}</td>
+      <td>${vetoBadge}</td><td>${conf}</td><td>${flags}</td>`;
+    const detail = document.createElement('tr');
+    detail.className = 'reasoning-row hidden';
+    detail.innerHTML = `<td colspan="5">${d.reasoning || ''}</td>`;
+    row.addEventListener('click', () => detail.classList.toggle('hidden'));
+    tbody.appendChild(row);
+    tbody.appendChild(detail);
+  });
+  if (!decisions.length) tbody.innerHTML = '<tr><td colspan="5">No decisions logged yet</td></tr>';
 }
 
 function renderSummary(s) {

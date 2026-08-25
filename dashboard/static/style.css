@@ -51,3 +51,32 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #2a2d35; }
   text-align: center; background: #7c2d12; color: #fed7aa;
   padding: 8px; border-radius: 8px;
 }
+
+.hint { font-size: 0.8rem; color: #888; margin: -6px 0 10px; }
+
+.agents-overview { display: flex; flex-direction: column; gap: 10px; }
+.agent-row { border-bottom: 1px solid #2a2d35; padding-bottom: 10px; }
+.agent-row:last-child { border-bottom: none; padding-bottom: 0; }
+.agent-row-top { display: flex; justify-content: space-between; align-items: center; }
+.agent-label { font-weight: 600; }
+.agent-role { font-size: 0.8rem; color: #aaa; margin-top: 2px; }
+.agent-detail { font-size: 0.75rem; color: #666; margin-top: 2px; }
+
+.badge {
+  font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.badge-green { background: #14532d; color: #4ade80; }
+.badge-red { background: #7f1d1d; color: #f87171; cursor: help; }
+.badge-gray { background: #2a2d35; color: #888; }
+
+.tag {
+  display: inline-block; font-size: 0.7rem; background: #2a2d35; color: #ccc;
+  padding: 2px 6px; border-radius: 6px; margin: 1px 3px 1px 0;
+}
+
+tr.expandable { cursor: pointer; }
+tr.expandable:hover { background: #20232b; }
+tr.reasoning-row td {
+  font-size: 0.8rem; color: #aaa; background: #14161b; white-space: normal;
+}
