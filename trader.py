@@ -781,6 +781,22 @@ class TradingManager:
                 if price <= 0 or buying_power < position_size_usd:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
                     continue
+                # Phase 1 research-agent veto (see agents/research_agent.py and the
+                # approved multi-agent plan) -- checked after the guards above, not
+                # before, so a buy that would've been skipped anyway (already held,
+                # max positions, insufficient buying power) never costs an API call.
+                # Import is local/lazy, not at module level: RESEARCH_AGENT_VETO_ENABLED
+                # defaults False, and this keeps a deployment lacking the `anthropic`
+                # package (e.g. production, until this is explicitly approved there)
+                # from failing to import trader.py at all -- see Lesson #8 (an
+                # unreviewed git pull once briefly put crypto live on production);
+                # the same class of accidental-deploy risk applies here.
+                if settings.RESEARCH_AGENT_VETO_ENABLED:
+                    from agents.research_agent import propose as agent_propose
+                    decision = agent_propose(sig)
+                    if decision.get('veto'):
+                        logger.info(f"[RESEARCH AGENT] Vetoed {symbol} buy — {decision.get('reasoning')}")
+                        continue
                 notional = round(position_size_usd, 2)
                 client_order_id = f"scan-buy-{symbol.replace('/', '')}-{int(datetime.now().timestamp())}"
                 try:

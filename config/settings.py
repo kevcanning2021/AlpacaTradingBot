@@ -99,3 +99,16 @@ WHATSAPP_APIKEY = os.getenv('WHATSAPP_APIKEY', '')  # API key received from Call
 TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true'
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')  # from @BotFather
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')      # your personal chat ID with the bot
+
+# Research agent (agents/research_agent.py) -- added 2026-08-25, Phase 0 (shadow)
+# only. Two separate gates, same pattern as pdt15rev-bot's TRAILING_STOP_ENABLED:
+# RESEARCH_AGENT_ENABLED means the code exists and can be invoked (e.g. from a
+# standalone script/cron entry); RESEARCH_AGENT_VETO_ENABLED is the separate,
+# still-unused-as-of-Phase-0 gate for actually wiring a veto into
+# trader.py: scan_and_execute() -- see the approved plan for the phase
+# boundary. Both default False; nothing in the live trading path references
+# either yet.
+RESEARCH_AGENT_ENABLED = os.getenv('RESEARCH_AGENT_ENABLED', 'false').lower() == 'true'
+RESEARCH_AGENT_VETO_ENABLED = os.getenv('RESEARCH_AGENT_VETO_ENABLED', 'false').lower() == 'true'
+RESEARCH_AGENT_MODEL = os.getenv('RESEARCH_AGENT_MODEL', 'claude-sonnet-5')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
