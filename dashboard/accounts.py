@@ -24,6 +24,13 @@ ACCOUNTS = {
             secret_key=config.ALPACA_SOFI_SECRET_KEY,
         )),
     },
+    'trading2': {
+        'label': 'Trading 2.0',
+        'client': ReadOnlyAlpacaClient(AlpacaClient(
+            api_key=config.ALPACA_TRADING2_API_KEY,
+            secret_key=config.ALPACA_TRADING2_SECRET_KEY,
+        )),
+    },
 }
 
 
@@ -57,6 +64,12 @@ AGENTS_OVERVIEW = [
         'id': 'sofi',
         'label': 'SOFI Bot',
         'role': 'Separate $50 account, SOFI-only, opening-range reversal strategy.',
+        'monitored': True,
+    },
+    {
+        'id': 'trading2',
+        'label': 'Trading 2.0',
+        'role': 'Separate, isolated multi-timeframe bot (H2/H1/M5/M1 trend+pullback), own paper account. Not part of this repo.',
         'monitored': True,
     },
     {

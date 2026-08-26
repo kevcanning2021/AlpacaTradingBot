@@ -10,6 +10,8 @@ ALPACA_TEST_API_KEY = os.getenv('ALPACA_TEST_API_KEY', '')
 ALPACA_TEST_SECRET_KEY = os.getenv('ALPACA_TEST_SECRET_KEY', '')
 ALPACA_SOFI_API_KEY = os.getenv('ALPACA_SOFI_API_KEY', '')
 ALPACA_SOFI_SECRET_KEY = os.getenv('ALPACA_SOFI_SECRET_KEY', '')
+ALPACA_TRADING2_API_KEY = os.getenv('ALPACA_TRADING2_API_KEY', '')
+ALPACA_TRADING2_SECRET_KEY = os.getenv('ALPACA_TRADING2_SECRET_KEY', '')
 
 # Path to the research agent's decision log (agents/state.py on the main
 # AlpacaTradingBot codebase, Test account only -- see the dashboard
