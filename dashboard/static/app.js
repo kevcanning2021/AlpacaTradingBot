@@ -1,6 +1,7 @@
 const POLL_INTERVAL_MS = 15000;
 
 let currentAccount = null;
+let currentTab = 'account'; // 'account' or 'agents'
 let pollTimer = null;
 
 function showLogin(message) {
@@ -36,13 +37,31 @@ async function loadAccounts() {
     btn.onclick = () => selectAccount(acct.id, btn);
     tabs.appendChild(btn);
   });
+  const agentsBtn = document.createElement('button');
+  agentsBtn.textContent = 'Agents';
+  agentsBtn.className = 'tab';
+  agentsBtn.onclick = () => selectAgentsTab(agentsBtn);
+  tabs.appendChild(agentsBtn);
+
   if (accounts.length) selectAccount(accounts[0].id, tabs.querySelector('.tab'));
 }
 
 function selectAccount(accountId, btnEl) {
   currentAccount = accountId;
+  currentTab = 'account';
   document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
   if (btnEl) btnEl.classList.add('active');
+  document.getElementById('account-tab-content').classList.remove('hidden');
+  document.getElementById('agents-tab-content').classList.add('hidden');
+  refresh();
+}
+
+function selectAgentsTab(btnEl) {
+  currentTab = 'agents';
+  document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  document.getElementById('agents-tab-content').classList.remove('hidden');
+  document.getElementById('account-tab-content').classList.add('hidden');
   refresh();
 }
 
