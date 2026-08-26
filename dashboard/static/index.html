@@ -35,7 +35,7 @@
   <section class="card">
     <h2>Positions</h2>
     <table id="positions-table">
-      <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&amp;L</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Bought At</th><th>Now Worth</th><th>Profit/Loss</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>
@@ -43,18 +43,20 @@
   <section class="card">
     <h2>Recent Orders</h2>
     <table id="orders-table">
-      <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th>Filled Price</th><th>Submitted</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th>Filled Price</th><th>When</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>
 
   <section class="card">
-    <h2>Research Agent Decisions</h2>
-    <p class="hint">Reviews Test-account buy signals, can veto — click a row for the full reasoning.</p>
-    <table id="research-agent-table">
-      <thead><tr><th>Time</th><th>Symbol</th><th>Veto</th><th>Confidence</th><th>Risk Flags</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <button type="button" id="research-agent-toggle" class="section-toggle">Research Agent Decisions ▸</button>
+    <div id="research-agent-body" class="hidden">
+      <p class="hint">Reviews Test-account buy signals and can block one — click a row for the full reasoning.</p>
+      <table id="research-agent-table">
+        <thead><tr><th>Time</th><th>Symbol</th><th>Decision</th><th>Confidence</th><th>Flags</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
   <p id="offline-banner" class="hidden">Can't reach the server — showing last known state.</p>

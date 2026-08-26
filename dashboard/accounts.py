@@ -51,37 +51,37 @@ AGENTS_OVERVIEW = [
     {
         'id': 'prod',
         'label': 'Production',
-        'role': 'Live paper trading, ~$100k account. Stock + crypto signals, real order execution.',
+        'role': 'The main bot, trading real strategy signals on its paper account.',
         'monitored': True,
     },
     {
         'id': 'test',
         'label': 'Test',
-        'role': 'Live paper trading, $100 account. Trials new strategies before they’re promoted to Production.',
+        'role': 'Small account used to try out new ideas before they go live on Production.',
         'monitored': True,
     },
     {
         'id': 'sofi',
         'label': 'SOFI Bot',
-        'role': 'Separate $50 account, SOFI-only, opening-range reversal strategy.',
+        'role': 'Its own small account, trades SOFI stock only.',
         'monitored': True,
     },
     {
         'id': 'trading2',
         'label': 'Trading 2.0',
-        'role': 'Separate, isolated multi-timeframe bot (H2/H1/M5/M1 trend+pullback), own paper account. Not part of this repo.',
+        'role': 'A separate bot with a different trading style, on its own account.',
         'monitored': True,
     },
     {
         'id': 'research_agent',
         'label': 'Research Agent',
-        'role': 'Reviews buy signals on the Test account with live news search, can veto — never originates or executes a trade itself.',
+        'role': "Double-checks Test's buy signals against the news, and can block one it doesn't like. Never trades on its own.",
         'monitored': True,
     },
     {
         'id': 'shadow_crypto',
         'label': 'Shadow Crypto',
-        'role': 'Watches Binance BTC, analysis only — never places real orders.',
+        'role': "Watches Bitcoin and takes notes, but isn't hooked up to the dashboard yet.",
         'monitored': False,
     },
 ]

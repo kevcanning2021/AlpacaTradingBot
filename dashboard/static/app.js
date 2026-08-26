@@ -73,10 +73,10 @@ async function refresh() {
 }
 
 function healthBadge(health) {
-  if (!health || health.healthy === null) return '<span class="badge badge-gray">not monitored</span>';
+  if (!health || health.healthy === null) return '<span class="badge badge-gray">Not tracked</span>';
   return health.healthy
-    ? '<span class="badge badge-green">ok</span>'
-    : '<span class="badge badge-red" title="' + (health.detail || '').replace(/"/g, '&quot;') + '">error</span>';
+    ? '<span class="badge badge-green">Working</span>'
+    : '<span class="badge badge-red" title="' + (health.detail || '').replace(/"/g, '&quot;') + '">Problem</span>';
 }
 
 function renderAgentsOverview(agents) {
@@ -98,10 +98,10 @@ function renderResearchAgentDecisions(decisions) {
   decisions.forEach((d) => {
     const row = document.createElement('tr');
     row.className = 'expandable';
-    const vetoBadge = d.veto ? '<span class="badge badge-red">veto</span>' : '<span class="badge badge-green">clear</span>';
-    const conf = (d.confidence === null || d.confidence === undefined) ? '-' : d.confidence.toFixed(2);
+    const vetoBadge = d.veto ? '<span class="badge badge-red">Blocked</span>' : '<span class="badge badge-green">Allowed</span>';
+    const conf = (d.confidence === null || d.confidence === undefined) ? '-' : Math.round(d.confidence * 100) + '%';
     const flags = (d.risk_flags || []).map((f) => `<span class="tag">${f}</span>`).join('');
-    row.innerHTML = `<td>${(d.timestamp || '').replace('T', ' ').slice(0, 19)}</td><td>${d.symbol}</td>
+    row.innerHTML = `<td>${niceTime(d.timestamp)}</td><td>${d.symbol}</td>
       <td>${vetoBadge}</td><td>${conf}</td><td>${flags}</td>`;
     const detail = document.createElement('tr');
     detail.className = 'reasoning-row hidden';
@@ -117,8 +117,7 @@ function renderSummary(s) {
   document.getElementById('summary-card').innerHTML = `
     <h2>Account</h2>
     <div class="summary-grid">
-      <div><span class="label">Equity</span><span class="value">${money(s.equity)}</span></div>
-      <div><span class="label">Buying Power</span><span class="value">${money(s.buying_power)}</span></div>
+      <div><span class="label">Total Value</span><span class="value">${money(s.equity)}</span></div>
       <div><span class="label">Cash</span><span class="value">${money(s.cash)}</span></div>
       <div><span class="label">Status</span><span class="value">${s.status || ''}</span></div>
     </div>`;
@@ -138,13 +137,17 @@ function renderPositions(positions) {
   if (!positions.length) tbody.innerHTML = '<tr><td colspan="5">No open positions</td></tr>';
 }
 
+function niceTime(iso) {
+  return (iso || '').replace('T', ' ').slice(0, 16);
+}
+
 function renderOrders(orders) {
   const tbody = document.querySelector('#orders-table tbody');
   tbody.innerHTML = '';
   orders.forEach((o) => {
     const row = document.createElement('tr');
     row.innerHTML = `<td>${o.symbol}</td><td>${o.side}</td><td>${o.status}</td>
-      <td>${o.filled_avg_price ? money(o.filled_avg_price) : '-'}</td><td>${o.submitted_at || ''}</td>`;
+      <td>${o.filled_avg_price ? money(o.filled_avg_price) : '-'}</td><td>${niceTime(o.submitted_at)}</td>`;
     tbody.appendChild(row);
   });
   if (!orders.length) tbody.innerHTML = '<tr><td colspan="5">No orders yet</td></tr>';
@@ -173,6 +176,12 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 document.getElementById('logout-btn').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   showLogin();
+});
+
+document.getElementById('research-agent-toggle').addEventListener('click', (e) => {
+  const body = document.getElementById('research-agent-body');
+  const nowHidden = body.classList.toggle('hidden');
+  e.target.textContent = 'Research Agent Decisions ' + (nowHidden ? '▸' : '▾');
 });
 
 (async function init() {
