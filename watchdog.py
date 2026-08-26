@@ -1,6 +1,6 @@
 """Standalone VPS watchdog: checks service health, log errors, and account
-state across all three live Alpaca accounts (Production, Test, SOFI); sends
-a Telegram alert only when something's actually wrong.
+state across all live Alpaca accounts on this VPS (Production, Test, SOFI,
+Trading 2.0); sends a Telegram alert only when something's actually wrong.
 
 Runs from /opt/alpaca-bot-test via crontab every 15 min on the VPS itself,
 independent of any Claude Code session -- see KNOWN_LIMITATIONS.md / project
@@ -8,10 +8,12 @@ notes for why this exists (a session-only health check dies when the
 session/laptop does). Originally Test-account-only; extended 2026-08-25
 after a production API-key outage (and, separately, a brief production
 401 blip) both went unnoticed until manually checked -- this account's own
-.env only ever held this account's own credentials, so Production and SOFI
-were invisible to it. Cross-account read access uses the same
-ALPACA_PROD_*/ALPACA_SOFI_* env var naming the dashboard already
-established for the same purpose (see dashboard/config.py).
+.env only ever held this account's own credentials, so the other bots were
+invisible to it. Extended again 2026-08-26 to add Trading 2.0 (a separate,
+isolated multi-timeframe bot on the same VPS, not part of this repo).
+Cross-account read access uses the same ALPACA_PROD_*/ALPACA_SOFI_*/
+ALPACA_TRADING2_* env var naming the dashboard already established for the
+same purpose (see dashboard/config.py).
 
 State is kept in a small JSON file so:
 - the same issue doesn't re-alert every 15 min (only on first detection, then
@@ -32,7 +34,7 @@ from config import settings
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'watchdog_state.json')
 SERVICES = [
     'alpaca-bot.service', 'alpaca-bot-test.service', 'alpaca-dashboard.service',
-    'alpaca-telegram-bot.service', 'pdt15rev-bot.service',
+    'alpaca-telegram-bot.service', 'pdt15rev-bot.service', 'trading-2-0.service',
 ]
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 
@@ -61,6 +63,12 @@ ACCOUNTS = {
         'log_unit': 'pdt15rev-bot.service',
         'api_key': os.getenv('ALPACA_SOFI_API_KEY', ''),
         'secret_key': os.getenv('ALPACA_SOFI_SECRET_KEY', ''),
+    },
+    'trading2': {
+        'label': 'Trading 2.0',
+        'log_unit': 'trading-2-0.service',
+        'api_key': os.getenv('ALPACA_TRADING2_API_KEY', ''),
+        'secret_key': os.getenv('ALPACA_TRADING2_SECRET_KEY', ''),
     },
 }
 
