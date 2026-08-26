@@ -1,5 +1,5 @@
-// Bumped v1 -> v2: style.css/app.js changed (agents overview + research agent panel).
-const SHELL_CACHE = 'shell-v2';
+// Bumped v2 -> v3: index.html/app.js/style.css changed (dashboard simplification pass).
+const SHELL_CACHE = 'shell-v3';
 const SHELL_FILES = [
   '/',
   '/static/style.css',
