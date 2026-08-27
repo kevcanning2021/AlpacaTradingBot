@@ -31,7 +31,7 @@ def _compute_rsi(prices: List[float], period: int = 14) -> float:
 class OpportunityScanner:
     """Scans a watchlist for EMA crossover + RSI signals and returns trade recommendations."""
 
-    BUY_RSI_MAX = 65   # Don't buy into overbought conditions
+    BUY_RSI_MAX = 70   # Don't buy into overbought conditions
     SELL_RSI_MIN = 80  # Exit overbought positions. Was 85 (raised from 75 on 2026-07-09 against
                        # a ~90-day window, reasoning that RSI routinely sits >75 for weeks during
                        # a real rally). Lowered back to 80 on 2026-07-16 after a 14-month backtest
