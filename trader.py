@@ -18,7 +18,7 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 't
 POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
 POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
 ZERO_SINCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'zero_since_state.json')
-DROUGHT_CALENDAR_DAYS = 14  # approximates scanner.py's DROUGHT_TRADING_DAYS (10) accounting for weekends
+DROUGHT_CALENDAR_DAYS = 7  # approximates scanner.py's DROUGHT_TRADING_DAYS (5) accounting for weekends
 
 
 def _now() -> str:

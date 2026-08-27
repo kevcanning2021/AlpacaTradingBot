@@ -33,8 +33,15 @@ from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'watchdog_state.json')
 SERVICES = [
-    'alpaca-bot.service', 'alpaca-bot-test.service', 'alpaca-dashboard.service',
-    'alpaca-telegram-bot.service', 'pdt15rev-bot.service', 'trading-2-0.service',
+    # alpaca-bot-test.service intentionally excluded: retired 2026-08-27, its
+    # account reassigned to trading-2-0 (Alpaca caps free accounts at 3 paper
+    # accounts). alpaca-telegram-bot.service also excluded: retired the same
+    # day, redundant with the dashboard once it correctly separated
+    # Main/Sofi/Nova (it had drifted to silently reporting Nova's data under
+    # a still-"test account"-labeled bot). Both are deliberately
+    # stopped+disabled -- alerting on either being inactive would just be noise.
+    'alpaca-bot.service', 'alpaca-dashboard.service',
+    'pdt15rev-bot.service', 'trading-2-0.service',
 ]
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 
@@ -49,26 +56,25 @@ ACCOUNTS = {
     'production': {
         'label': 'Production',
         'log_unit': 'alpaca-bot.service',
-        'api_key': os.getenv('ALPACA_PROD_API_KEY', ''),
-        'secret_key': os.getenv('ALPACA_PROD_SECRET_KEY', ''),
+        'api_key': os.getenv('ALPACA_API_KEY_MAIN', ''),
+        'secret_key': os.getenv('ALPACA_SECRET_KEY_MAIN', ''),
     },
-    'test': {
-        'label': 'Test',
-        'log_unit': 'alpaca-bot-test.service',
-        'api_key': settings.ALPACA_API_KEY,
-        'secret_key': settings.ALPACA_SECRET_KEY,
-    },
+    # 'test' account intentionally removed 2026-08-27: alpaca-bot-test was
+    # retired and its account (whose credentials still live in this service's
+    # own settings.ALPACA_API_KEY/SECRET_KEY, unchanged) was reassigned to
+    # trading-2-0 -- see the 'trading2' entry below, which now points at the
+    # same account under its correct current label.
     'sofi': {
         'label': 'SOFI',
         'log_unit': 'pdt15rev-bot.service',
-        'api_key': os.getenv('ALPACA_SOFI_API_KEY', ''),
-        'secret_key': os.getenv('ALPACA_SOFI_SECRET_KEY', ''),
+        'api_key': os.getenv('ALPACA_API_KEY_SOFI', ''),
+        'secret_key': os.getenv('ALPACA_SECRET_KEY_SOFI', ''),
     },
     'trading2': {
         'label': 'Trading 2.0',
         'log_unit': 'trading-2-0.service',
-        'api_key': os.getenv('ALPACA_TRADING2_API_KEY', ''),
-        'secret_key': os.getenv('ALPACA_TRADING2_SECRET_KEY', ''),
+        'api_key': os.getenv('ALPACA_API_KEY_NOVA', ''),
+        'secret_key': os.getenv('ALPACA_SECRET_KEY_NOVA', ''),
     },
 }
 
@@ -219,15 +225,24 @@ def main():
 
     current_keys = {key for key, _ in all_issues}
 
+    # active_alerts[key] carries the actual message (not just a timestamp) as of
+    # 2026-08-27, added so the dashboard's /api/issues can show something real --
+    # 'message' is refreshed every run regardless of the Telegram cooldown below, so
+    # the dashboard always reflects the latest detail even between pings; 'first_seen'
+    # is preserved across cooldown cycles so the dashboard can show how long an issue
+    # has been active, not just when it was last announced.
     messages = []
     for key, msg in all_issues:
-        last_sent = active.get(key)
-        if last_sent is None:
-            messages.append(msg)
-            active[key] = now.isoformat()
-        elif (now - datetime.fromisoformat(last_sent)).total_seconds() > ALERT_COOLDOWN_SECONDS:
-            messages.append(f'[STILL ACTIVE] {msg}')
-            active[key] = now.isoformat()
+        existing = active.get(key) if isinstance(active.get(key), dict) else None
+        first_seen = existing['first_seen'] if existing else now.isoformat()
+        last_alert_at = existing.get('last_alert_at') if existing else None
+        should_alert = last_alert_at is None or (
+            now - datetime.fromisoformat(last_alert_at)
+        ).total_seconds() > ALERT_COOLDOWN_SECONDS
+        if should_alert:
+            messages.append(msg if last_alert_at is None else f'[STILL ACTIVE] {msg}')
+            last_alert_at = now.isoformat()
+        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg}
 
     for key in list(active.keys()):
         if key not in current_keys:

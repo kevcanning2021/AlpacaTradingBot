@@ -52,7 +52,7 @@ def _compute_bollinger(prices: List[float], period: int = 20, num_std: float = 2
 class OpportunityScanner:
     """Scans a watchlist for EMA crossover + RSI signals and returns trade recommendations."""
 
-    BUY_RSI_MAX = 65   # Don't buy into overbought conditions
+    BUY_RSI_MAX = 70   # Don't buy into overbought conditions
     SELL_RSI_MIN = 80  # Exit overbought positions. Was 85 (raised from 75 on 2026-07-09 against
                        # a ~90-day window, reasoning that RSI routinely sits >75 for weeks during
                        # a real rally). Lowered back to 80 on 2026-07-16 after a 14-month backtest
@@ -94,8 +94,8 @@ class OpportunityScanner:
     # train and was rejected as overfit) and not outlier-driven -- every
     # leave-one-symbol-out result stayed solidly positive. See STRATEGY.md.
     BOLLINGER_PERIOD = 20
-    BOLLINGER_STD = 2
-    BOLLINGER_OVERSOLD_RSI = 40  # entry confirmation: RSI must also say oversold
+    BOLLINGER_STD = 1.8
+    BOLLINGER_OVERSOLD_RSI = 45  # entry confirmation: RSI must also say oversold
 
     # Dual stock signal sources, 2026-08-17: Bollinger and EMA9/21 run as two
     # independent, already-separately-validated entry sources on the stock
@@ -139,7 +139,7 @@ class OpportunityScanner:
     # everything else on this page. Does nothing for an ordinary few-day gap,
     # only the genuine long tail.
     BOLLINGER_STD_FALLBACK = 1.5
-    DROUGHT_TRADING_DAYS = 10  # trader.py approximates this in calendar days
+    DROUGHT_TRADING_DAYS = 5  # trader.py approximates this in calendar days
 
     # Crypto signal source, replaced 2026-08-24: the original EMA9/21 crossover
     # (inherited from the stock strategy, never independently backtested for
