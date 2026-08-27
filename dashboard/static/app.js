@@ -76,6 +76,7 @@ async function refresh() {
     const calls = [
       api('/api/agents-overview').then((r) => r.json()).then(renderAgentsOverview),
       api('/api/research-agent/decisions').then((r) => r.json()).then(renderResearchAgentDecisions),
+      api('/api/issues').then((r) => r.json()).then(renderIssues),
     ];
     if (currentAccount) {
       calls.push(
@@ -130,6 +131,24 @@ function renderResearchAgentDecisions(decisions) {
     tbody.appendChild(detail);
   });
   if (!decisions.length) tbody.innerHTML = '<tr><td colspan="5">No decisions logged yet</td></tr>';
+}
+
+function renderIssues(issues) {
+  const card = document.getElementById('issues-card');
+  const body = document.getElementById('issues-body');
+  if (!issues.length) {
+    card.classList.remove('issues-alert');
+    card.classList.add('issues-clear');
+    body.innerHTML = 'All clear — no active issues.';
+    return;
+  }
+  card.classList.remove('issues-clear');
+  card.classList.add('issues-alert');
+  body.innerHTML = issues.map((i) => `
+    <div class="issue-row">
+      <div class="issue-message">${i.message}</div>
+      <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
+    </div>`).join('');
 }
 
 function renderSummary(s) {

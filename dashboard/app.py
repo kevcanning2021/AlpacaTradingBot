@@ -22,6 +22,7 @@ ORDERS_TTL = 30
 AGENTS_OVERVIEW_TTL = 10
 RESEARCH_AGENT_DECISIONS_TTL = 10
 RESEARCH_AGENT_DECISIONS_LIMIT = 50
+ISSUES_TTL = 10
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -210,6 +211,35 @@ async def research_agent_decisions(request):
     return JSONResponse(data)
 
 
+async def issues(request):
+    """Surfaces the fleet watchdog's currently-active issues (service down, new
+    log errors, stop-loss breaches, unattributed orders) so they're visible on
+    the dashboard itself, not just as a Telegram ping someone might miss. Reads
+    watchdog.py's own state file rather than re-implementing any detection here
+    -- one place decides what counts as an issue, the dashboard just displays
+    it. An empty/missing file is a normal 'nothing wrong' state, not an error."""
+    def _load():
+        try:
+            with open(config.WATCHDOG_STATE_PATH) as f:
+                state = json.load(f)
+        except FileNotFoundError:
+            return []
+        active = state.get('active_alerts', {})
+        flat = [
+            {'key': key, 'message': v.get('message', ''), 'first_seen': v.get('first_seen')}
+            for key, v in active.items() if isinstance(v, dict)
+        ]
+        flat.sort(key=lambda i: i['first_seen'] or '', reverse=True)
+        return flat
+
+    try:
+        data = get_or_fetch('watchdog', 'issues', ISSUES_TTL, _load)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"[dashboard] Failed to read watchdog state: {e}")
+        return JSONResponse({'error': str(e)}, status_code=502)
+    return JSONResponse(data)
+
+
 async def index(request):
     return FileResponse(STATIC_DIR / 'index.html')
 
@@ -224,6 +254,7 @@ routes = [
     Route('/api/accounts/{account_id}/orders', account_orders),
     Route('/api/agents-overview', agents_overview),
     Route('/api/research-agent/decisions', research_agent_decisions),
+    Route('/api/issues', issues),
     Mount('/static', app=StaticFiles(directory=str(STATIC_DIR)), name='static'),
 ]
 
