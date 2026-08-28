@@ -11,3 +11,4 @@ trade_history.json
 venv/
 *.bak-*
 *.bak
+position_method_state.json
