@@ -146,6 +146,7 @@ function renderIssues(issues) {
   card.classList.add('issues-alert');
   body.innerHTML = issues.map((i) => `
     <div class="issue-row">
+      <span class="tag">${i.source === 'fleet-review' ? 'fleet review' : 'watchdog'}</span>
       <div class="issue-message">${i.message}</div>
       <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
     </div>`).join('');

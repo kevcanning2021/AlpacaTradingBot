@@ -211,31 +211,44 @@ async def research_agent_decisions(request):
     return JSONResponse(data)
 
 
+def _load_active_alerts(path, source):
+    """Shared shape: {active_alerts: {key: {first_seen, message}}}. Used for
+    both watchdog.py's state (service down, new log errors, stop-loss
+    breaches, unattributed orders) and the fleet review agent's state
+    (medium/high-risk proposals awaiting approval, see /opt/fleet-review-agent,
+    2026-08-28) -- two independently-scheduled writers, kept in separate files
+    so they can never race on the same one, merged here into a single list."""
+    try:
+        with open(path) as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return []
+    active = state.get('active_alerts', {})
+    return [
+        {'key': key, 'message': v.get('message', ''), 'first_seen': v.get('first_seen'), 'source': source}
+        for key, v in active.items() if isinstance(v, dict)
+    ]
+
+
 async def issues(request):
-    """Surfaces the fleet watchdog's currently-active issues (service down, new
-    log errors, stop-loss breaches, unattributed orders) so they're visible on
-    the dashboard itself, not just as a Telegram ping someone might miss. Reads
-    watchdog.py's own state file rather than re-implementing any detection here
-    -- one place decides what counts as an issue, the dashboard just displays
-    it. An empty/missing file is a normal 'nothing wrong' state, not an error."""
+    """Surfaces currently-active issues from the fleet watchdog (service down,
+    new log errors, stop-loss breaches, unattributed orders) and the fleet
+    review agent (pending fix proposals awaiting approval) so they're visible
+    on the dashboard itself, not just as a Telegram ping someone might miss.
+    Reads each source's own state file rather than re-implementing any
+    detection here -- one place per concern decides what counts as an issue,
+    the dashboard just displays and merges. An empty/missing file is a normal
+    'nothing wrong' state, not an error."""
     def _load():
-        try:
-            with open(config.WATCHDOG_STATE_PATH) as f:
-                state = json.load(f)
-        except FileNotFoundError:
-            return []
-        active = state.get('active_alerts', {})
-        flat = [
-            {'key': key, 'message': v.get('message', ''), 'first_seen': v.get('first_seen')}
-            for key, v in active.items() if isinstance(v, dict)
-        ]
+        flat = (_load_active_alerts(config.WATCHDOG_STATE_PATH, 'watchdog')
+                + _load_active_alerts(config.FLEET_REVIEW_STATE_PATH, 'fleet-review'))
         flat.sort(key=lambda i: i['first_seen'] or '', reverse=True)
         return flat
 
     try:
         data = get_or_fetch('watchdog', 'issues', ISSUES_TTL, _load)
     except (json.JSONDecodeError, OSError) as e:
-        logger.error(f"[dashboard] Failed to read watchdog state: {e}")
+        logger.error(f"[dashboard] Failed to read issue state: {e}")
         return JSONResponse({'error': str(e)}, status_code=502)
     return JSONResponse(data)
 
