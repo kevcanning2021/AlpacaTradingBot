@@ -72,14 +72,22 @@ def _load_system_prompt() -> str:
         return f.read()
 
 
-def _fail_open(symbol: str, reason: str) -> Dict:
+def _usage_dict(response) -> Dict:
+    return {'input_tokens': response.usage.input_tokens, 'output_tokens': response.usage.output_tokens}
+
+
+def _fail_open(symbol: str, reason: str, usage: Optional[Dict] = None) -> Dict:
     """Any failure here means 'no opinion' -- the deterministic scanner
     signal this was consuming is left exactly as-is. Per the approved plan:
     fail toward the already-validated deterministic path, never toward
     blocking a trade or trusting a broken/partial response. Callers must
     treat failed=True identically to veto=False, not as a reason to skip or
-    retry inline."""
+    retry inline. usage (input_tokens/output_tokens) is included whenever a
+    response actually came back -- a refusal or non-terminal stop still
+    bills real tokens, only a call that never completed at all has none."""
     decision = {'veto': False, 'confidence': None, 'reasoning': f'agent call failed: {reason}', 'risk_flags': [], 'failed': True}
+    if usage is not None:
+        decision['usage'] = usage
     record_decision(symbol, decision)
     logger.warning(f"[research_agent] {symbol}: failed open ({reason})")
     return decision
@@ -132,9 +140,11 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None) -> Dict:
     except anthropic.APIError as e:
         return _fail_open(signal['symbol'], f'{type(e).__name__}: {e}')
 
+    usage = _usage_dict(response)
+
     if response.stop_reason == 'refusal':
         category = getattr(response.stop_details, 'category', 'unknown') if response.stop_details else 'unknown'
-        return _fail_open(signal['symbol'], f'model refused: {category}')
+        return _fail_open(signal['symbol'], f'model refused: {category}', usage=usage)
 
     if response.stop_reason != 'end_turn':
         # Covers pause_turn (a long-running server-tool turn that would need
@@ -142,18 +152,20 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None) -> Dict:
         # any other non-terminal stop_reason. Failing open here rather than
         # guessing at a resume is the same "fail toward the deterministic
         # path" choice as every other branch in this function.
-        return _fail_open(signal['symbol'], f'non-terminal stop_reason: {response.stop_reason}')
+        return _fail_open(signal['symbol'], f'non-terminal stop_reason: {response.stop_reason}', usage=usage)
 
     text_blocks = [b.text for b in response.content if b.type == 'text']
     if not text_blocks:
-        return _fail_open(signal['symbol'], 'no text block in response')
+        return _fail_open(signal['symbol'], 'no text block in response', usage=usage)
 
     try:
         decision = json.loads(text_blocks[-1])
     except json.JSONDecodeError as e:
-        return _fail_open(signal['symbol'], f'malformed JSON: {e}')
+        return _fail_open(signal['symbol'], f'malformed JSON: {e}', usage=usage)
 
     decision['failed'] = False
+    decision['usage'] = usage
     record_decision(signal['symbol'], decision)
-    logger.info(f"[research_agent] {signal['symbol']}: veto={decision.get('veto')} confidence={decision.get('confidence')}")
+    logger.info(f"[research_agent] {signal['symbol']}: veto={decision.get('veto')} confidence={decision.get('confidence')} "
+                f"input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']}")
     return decision
