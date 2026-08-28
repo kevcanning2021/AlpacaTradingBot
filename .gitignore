@@ -14,3 +14,4 @@ scratch_agent_backtest/
 venv/
 *.bak-*
 *.bak
+zero_since_state.json
