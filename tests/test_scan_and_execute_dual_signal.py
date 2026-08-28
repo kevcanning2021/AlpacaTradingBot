@@ -227,11 +227,13 @@ class VetoCoversBothMethodsTests(unittest.TestCase):
         with patch.object(trader.OpportunityScanner, 'scan', return_value=[BOLLINGER_BUY]), \
              patch('trader.research_propose', return_value={'veto': False, 'confidence': 0.7,
                                                               'reasoning': 'no adverse news', 'risk_flags': [],
-                                                              'failed': False}):
+                                                              'failed': False}), \
+             patch.object(tm, '_save_position_methods') as mock_save:
             result = tm.scan_and_execute(watchlist=['AAPL'], position_size_usd=500, max_positions=5)
         self.assertTrue(client.create_order.called)
         self.assertEqual(len(result['executed']), 1)
         self.assertEqual(tm.position_methods['AAPL'], 'bollinger')
+        mock_save.assert_called_once()
 
 
 if __name__ == '__main__':
