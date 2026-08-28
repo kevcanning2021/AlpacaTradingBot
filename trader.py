@@ -449,6 +449,23 @@ class TradingManager:
                 logger.info(f"[{symbol}] Re-entry threshold hit but insufficient buying power (${buying_power:.2f})")
                 return buying_power
 
+            if settings.RESEARCH_AGENT_VETO_ENABLED:
+                reentry_sig = {
+                    'symbol': order_symbol, 'signal': 'buy',
+                    'reason': f'Re-entry: pulled back {round(pullback_pct * 100, 2)}% from peak ${round(peak_price, 2)}, RSI {round(rsi, 1)} confirms momentum',
+                    'price': current_price, 'rsi': round(rsi, 2),
+                }
+                decision = research_propose(reentry_sig)
+                if decision.get('veto'):
+                    report['actions_taken'].append({
+                        'action': 'REENTRY_SKIPPED',
+                        'symbol': symbol,
+                        'pullback_pct': round(pullback_pct * 100, 2),
+                        'recommendation': f'Pulled back {round(pullback_pct * 100, 2)}% from peak but the research agent vetoed the re-entry: {decision.get("reasoning")}'
+                    })
+                    logger.info(f"[{symbol}] Research agent vetoed re-entry — {decision.get('reasoning')}")
+                    return buying_power
+
             notional = round(position_size_usd, 2)
             client_order_id = f"reentry-{symbol}-{int(datetime.now().timestamp())}"
             try:
