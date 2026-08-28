@@ -9,3 +9,6 @@ position_opened_state.json
 strategy_check_state.json
 trade_history.json
 scratch_crypto_backtest/
+venv/
+*.bak-*
+*.bak
