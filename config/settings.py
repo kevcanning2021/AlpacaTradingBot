@@ -99,3 +99,11 @@ WHATSAPP_APIKEY = os.getenv('WHATSAPP_APIKEY', '')  # API key received from Call
 TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true'
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')  # from @BotFather
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')      # your personal chat ID with the bot
+
+# Research agent (Claude + web search veto on buy signals) -- ported from
+# Mini/agents/research_agent.py, wired into trader.py.scan_and_execute()
+# 2026-08-28. Fails open on any error; never blocks a trade because the
+# agent itself broke, only because it found a concrete reason to.
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+RESEARCH_AGENT_VETO_ENABLED = os.getenv('RESEARCH_AGENT_VETO_ENABLED', 'false').lower() == 'true'
+RESEARCH_AGENT_MODEL = os.getenv('RESEARCH_AGENT_MODEL', 'claude-sonnet-5')

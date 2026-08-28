@@ -8,6 +8,7 @@ from alpaca_client import AlpacaClient, position_symbol
 from config import settings
 from telegram_notifier import TelegramNotifier
 from scanner import OpportunityScanner, _compute_rsi
+from agents.research_agent import propose as research_propose
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -696,6 +697,13 @@ class TradingManager:
                 if price <= 0 or buying_power < position_size_usd:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — insufficient buying power (${buying_power:.2f})")
                     continue
+
+                if settings.RESEARCH_AGENT_VETO_ENABLED:
+                    decision = research_propose(sig)
+                    if decision.get('veto'):
+                        logger.info(f"[SCANNER] Research agent vetoed {symbol} buy — {decision.get('reasoning')}")
+                        continue
+
                 notional = round(position_size_usd, 2)
                 client_order_id = f"scan-buy-{symbol.replace('/', '')}-{int(datetime.now().timestamp())}"
                 try:
