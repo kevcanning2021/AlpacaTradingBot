@@ -17,6 +17,7 @@ PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pea
 REENTRY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reentry_state.json')
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
 POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
+POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
 
 
 def _now() -> str:
@@ -45,6 +46,7 @@ class TradingManager:
         self.position_peak_prices = self._load_peak_prices()  # Track peak prices for stop loss
         self.position_opened_at = self._load_position_opened_at()  # When each open position was first observed
         self.reentry_fired = set(self._load_reentry_state())  # Symbols already re-entered since their current peak
+        self.position_methods = self._load_position_methods()  # {symbol: 'bollinger'|'ema'} for dual-signal exit routing
         self.trade_history = self._load_trade_history()  # Realized P&L per closed trade, for forward-test tracking
         self.strategy_adjustments = []   # Track strategy changes
         self.win_streak = 0              # Current winning streak
@@ -108,6 +110,27 @@ class TradingManager:
                 json.dump(list(self.reentry_fired), f)
         except OSError as e:
             logger.error(f"Failed to save re-entry state: {e}")
+
+    def _load_position_methods(self) -> Dict:
+        """{symbol: 'bollinger'|'ema'} for currently-held stock positions opened
+        under the dual-signal Bollinger+EMA setup (see scanner.py) -- so a held
+        position is only ever re-evaluated by the ONE method that opened it, not
+        re-checked against both. Persisted for the same restart-safety reason as
+        peak_prices/reentry_state above."""
+        if os.path.exists(POSITION_METHOD_FILE):
+            try:
+                with open(POSITION_METHOD_FILE) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load position-method state, starting fresh: {e}")
+        return {}
+
+    def _save_position_methods(self):
+        try:
+            with open(POSITION_METHOD_FILE, 'w') as f:
+                json.dump(self.position_methods, f)
+        except OSError as e:
+            logger.error(f"Failed to save position-method state: {e}")
 
     def _load_trade_history(self) -> list:
         """Persisted so realized P&L survives a restart -- strategy_check.py (a
@@ -248,6 +271,8 @@ class TradingManager:
                     self._save_peak_prices()
                     self.position_opened_at.pop(symbol, None)
                     self._save_position_opened_at()
+                    self.position_methods.pop(symbol, None)
+                    self._save_position_methods()
                     if symbol in self.reentry_fired:
                         self.reentry_fired.discard(symbol)
                         self._save_reentry_state()
@@ -310,6 +335,8 @@ class TradingManager:
                 self._save_peak_prices()
                 self.position_opened_at.pop(symbol, None)
                 self._save_position_opened_at()
+                self.position_methods.pop(symbol, None)
+                self._save_position_methods()
                 if symbol in self.reentry_fired:
                     self.reentry_fired.discard(symbol)
                     self._save_reentry_state()
@@ -677,14 +704,20 @@ class TradingManager:
         position_size_usd = position_size_usd if position_size_usd is not None else settings.POSITION_SIZE_USD
         max_positions = max_positions if max_positions is not None else settings.MAX_POSITIONS
 
-        scanner = OpportunityScanner(self.client)
-        signals = scanner.scan(watchlist)
-
+        # Positions are fetched BEFORE scanning (not after) so held_methods can be
+        # built and passed into scan() -- the dual-signal scanner needs to know
+        # which method opened each currently-held stock position to evaluate it
+        # correctly (see scanner.py: _analyze_bars). Real behavior change from the
+        # old fetch-after-scan order: on a positions/account fetch failure, this
+        # now correctly returns no signals at all, rather than stale
+        # already-computed ones -- held_methods can't be safely known without a
+        # successful fetch, and scanning without it would silently treat every
+        # held stock as unheld.
         try:
             all_positions = self.client.get_positions()
             account = self.client.get_account()
         except Exception as e:
-            return {'timestamp': _now(), 'error': str(e), 'signals': signals, 'executed': [], 'errors': [str(e)]}
+            return {'timestamp': _now(), 'error': str(e), 'signals': [], 'executed': [], 'errors': [str(e)]}
 
         # Crypto and stock orders/positions use different symbol formats (BTC/USD vs
         # BTCUSD) and should be capped independently, so scope everything below to the
@@ -694,6 +727,11 @@ class TradingManager:
         positions = [p for p in all_positions if p.get('asset_class') == asset_class]
 
         current_symbols = {p['symbol'] for p in positions}
+        held_methods = {s: self.position_methods[s] for s in current_symbols if s in self.position_methods}
+
+        scanner = OpportunityScanner(self.client)
+        signals = scanner.scan(watchlist, held_methods=held_methods)
+
         buying_power = float(account.get('buying_power', 0))
         executed = []
         errors = []
@@ -729,6 +767,9 @@ class TradingManager:
                     qty = round(notional / price, 4)
                     buying_power -= notional
                     executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
+                    if 'method' in sig:  # stocks only when dual signal is on; absent for crypto and EMA-only mode
+                        self.position_methods[pos_symbol] = sig['method']
+                        self._save_position_methods()
                     logger.info(f"[SCANNER] BUY ~${notional:.2f} ({qty} sh) {symbol} @ ~${price:.2f} — {sig['reason']}")
                 except Exception as e:
                     errors.append(f"Buy {symbol}: {e}")
@@ -746,6 +787,8 @@ class TradingManager:
                     self._save_peak_prices()
                     self.position_opened_at.pop(pos_symbol, None)
                     self._save_position_opened_at()
+                    self.position_methods.pop(pos_symbol, None)
+                    self._save_position_methods()
                     if pos_symbol in self.reentry_fired:
                         self.reentry_fired.discard(pos_symbol)
                         self._save_reentry_state()

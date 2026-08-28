@@ -107,3 +107,16 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')      # your personal chat I
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 RESEARCH_AGENT_VETO_ENABLED = os.getenv('RESEARCH_AGENT_VETO_ENABLED', 'false').lower() == 'true'
 RESEARCH_AGENT_MODEL = os.getenv('RESEARCH_AGENT_MODEL', 'claude-sonnet-5')
+
+# Dual stock signal source (Bollinger Band(20,2) mean-reversion + EMA9/21, first-fire-
+# wins, Bollinger preferred on same-day tie) -- ported from Mini/origin/master
+# (scanner.py, commit 9c2566d) 2026-08-28. Backtested (22mo, 460 daily bars, walk-
+# forward): 90 trades, +1.71%/trade, +35.89% total, positive on train (+18.25%) and
+# holdout (+15.70%), leave-one-symbol-out robust. NEVER forward-tested live -- defaults
+# False pending a real paper-account track record, same phased-rollout pattern as
+# RESEARCH_AGENT_VETO_ENABLED. Stock-only: crypto is deliberately excluded (a crypto
+# Bollinger variant backtested badly negative, -34.56%/-50.88% over 9mo BTC/ETH; crypto
+# keeps its existing single-method EMA9/21 regardless of this flag). Drought fallback
+# (narrow-band bounce after 10+ flat trading days) intentionally NOT ported -- n=1
+# backtest evidence, deferred to a separate follow-up once this has live results.
+DUAL_SIGNAL_BOLLINGER_ENABLED = os.getenv('DUAL_SIGNAL_BOLLINGER_ENABLED', 'false').lower() == 'true'
