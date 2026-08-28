@@ -12,3 +12,4 @@ venv/
 *.bak-*
 *.bak
 position_method_state.json
+agent_decisions_state.json
