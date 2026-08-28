@@ -11,3 +11,6 @@ trade_history.json
 agent_decisions_state.json
 scratch_crypto_backtest/
 scratch_agent_backtest/
+venv/
+*.bak-*
+*.bak
