@@ -77,7 +77,7 @@ AGENTS_OVERVIEW = [
     {
         'id': 'research_agent',
         'label': 'Research Agent',
-        'role': "Double-checks a candidate entry against the news (Claude + web search) before it's placed, and can veto it. Reinstated 2026-08-27 for Nova specifically (ported into bot/research_agent.py) -- not yet wired into Main or Sofi.",
+        'role': "Double-checks a candidate entry against the news (Claude + web search) before it's placed, and can veto it. Reinstated 2026-08-27 for Nova, extended to Main and Sofi on 2026-08-28 -- each bot runs its own independent copy.",
         'monitored': True,
     },
 ]

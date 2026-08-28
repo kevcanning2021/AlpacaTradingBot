@@ -160,25 +160,47 @@ def _account_health(account_id: str):
         return {'healthy': False, 'detail': str(e)}
 
 
+def _load_research_decisions():
+    """Reads all three bots' decision logs (Main, Sofi, Nova -- see
+    config.RESEARCH_AGENT_DECISIONS_PATHS) and merges them into one flat,
+    timestamp-sorted list, each entry tagged with which bot it came from.
+    A missing file just means that bot hasn't logged a decision yet, not an
+    error -- three independent processes, each writing its own file at its
+    own pace."""
+    flat = []
+    for bot, path in config.RESEARCH_AGENT_DECISIONS_PATHS.items():
+        try:
+            with open(path) as f:
+                decisions = json.load(f)
+        except FileNotFoundError:
+            continue
+        except (OSError, json.JSONDecodeError) as e:
+            # One bot's file being unreadable (permissions, transient disk
+            # issue) or corrupt shouldn't 502 the other two bots' decisions
+            # -- log and skip just this source.
+            logger.error(f"[dashboard] Failed to read {bot} research decisions ({path}): {e}")
+            continue
+        flat.extend(dict(d, symbol=symbol, bot=bot) for symbol, entries in decisions.items() for d in entries)
+    flat.sort(key=lambda d: d.get('timestamp') or '', reverse=True)
+    return flat
+
+
 def _research_agent_health():
-    """'Healthy' here means 'the decisions file is readable,' not 'the
-    agent is currently active' -- a veto call only fires on a rare real buy
-    signal (see agents/research_agent.py), so a quiet file is normal, not a
-    fault, unlike a regular heartbeat. detail carries the most recent
-    decision's timestamp/symbol when available."""
+    """'Healthy' here means 'every bot's decisions file that exists is
+    readable,' not 'the agent is currently active' -- a veto call only
+    fires on a rare real buy signal (see agents/research_agent.py /
+    bot/research_agent.py / pdt15rev-bot/research_agent.py), so a quiet
+    file is normal, not a fault, unlike a regular heartbeat. detail carries
+    the most recent decision's bot/timestamp/symbol across all three when
+    available."""
     try:
-        with open(config.RESEARCH_AGENT_DECISIONS_PATH) as f:
-            decisions = json.load(f)
-    except FileNotFoundError:
-        return {'healthy': True, 'detail': 'no decisions logged yet'}
+        flat = _load_research_decisions()
     except (json.JSONDecodeError, OSError) as e:
         return {'healthy': False, 'detail': str(e)}
-    flat = [dict(d, symbol=symbol) for symbol, entries in decisions.items() for d in entries]
     if not flat:
         return {'healthy': True, 'detail': 'no decisions logged yet'}
-    flat.sort(key=lambda d: d.get('timestamp') or '', reverse=True)
     latest = flat[0]
-    return {'healthy': True, 'detail': f"{len(flat)} logged, most recent: {latest['symbol']} at {latest.get('timestamp', 'unknown time')}"}
+    return {'healthy': True, 'detail': f"{len(flat)} logged, most recent: {latest['bot']}/{latest['symbol']} at {latest.get('timestamp', 'unknown time')}"}
 
 
 async def agents_overview(request):
@@ -194,14 +216,7 @@ async def agents_overview(request):
 
 async def research_agent_decisions(request):
     def _load():
-        try:
-            with open(config.RESEARCH_AGENT_DECISIONS_PATH) as f:
-                decisions = json.load(f)
-        except FileNotFoundError:
-            return []
-        flat = [dict(d, symbol=symbol) for symbol, entries in decisions.items() for d in entries]
-        flat.sort(key=lambda d: d.get('timestamp') or '', reverse=True)
-        return flat[:RESEARCH_AGENT_DECISIONS_LIMIT]
+        return _load_research_decisions()[:RESEARCH_AGENT_DECISIONS_LIMIT]
 
     try:
         data = get_or_fetch('research_agent', 'decisions', RESEARCH_AGENT_DECISIONS_TTL, _load)

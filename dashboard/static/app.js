@@ -121,16 +121,17 @@ function renderResearchAgentDecisions(decisions) {
     const vetoBadge = d.veto ? '<span class="badge badge-red">Blocked</span>' : '<span class="badge badge-green">Allowed</span>';
     const conf = (d.confidence === null || d.confidence === undefined) ? '-' : Math.round(d.confidence * 100) + '%';
     const flags = (d.risk_flags || []).map((f) => `<span class="tag">${f}</span>`).join('');
-    row.innerHTML = `<td>${niceTime(d.timestamp)}</td><td>${d.symbol}</td>
+    const bot = d.bot ? d.bot[0].toUpperCase() + d.bot.slice(1) : '-';
+    row.innerHTML = `<td>${niceTime(d.timestamp)}</td><td>${bot}</td><td>${d.symbol}</td>
       <td>${vetoBadge}</td><td>${conf}</td><td>${flags}</td>`;
     const detail = document.createElement('tr');
     detail.className = 'reasoning-row hidden';
-    detail.innerHTML = `<td colspan="5">${d.reasoning || ''}</td>`;
+    detail.innerHTML = `<td colspan="6">${d.reasoning || ''}</td>`;
     row.addEventListener('click', () => detail.classList.toggle('hidden'));
     tbody.appendChild(row);
     tbody.appendChild(detail);
   });
-  if (!decisions.length) tbody.innerHTML = '<tr><td colspan="5">No decisions logged yet</td></tr>';
+  if (!decisions.length) tbody.innerHTML = '<tr><td colspan="6">No decisions logged yet</td></tr>';
 }
 
 function renderIssues(issues) {
