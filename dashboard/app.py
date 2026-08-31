@@ -227,12 +227,14 @@ async def research_agent_decisions(request):
 
 
 def _load_active_alerts(path, source):
-    """Shared shape: {active_alerts: {key: {first_seen, message}}}. Used for
-    both watchdog.py's state (service down, new log errors, stop-loss
-    breaches, unattributed orders) and the fleet review agent's state
-    (medium/high-risk proposals awaiting approval, see /opt/fleet-review-agent,
-    2026-08-28) -- two independently-scheduled writers, kept in separate files
-    so they can never race on the same one, merged here into a single list."""
+    """Shared shape: {active_alerts: {key: {first_seen, message}}} -- written
+    by watchdog.py (service down, new log errors, git drift, stop-loss
+    breaches, unattributed orders). Was also merged with a second source
+    (/opt/fleet-review-agent's pending proposals) 2026-08-28 through
+    2026-08-31; that component was retired when the user declined to keep
+    funding its ANTHROPIC_API_KEY usage, so this is back to a single source
+    -- kept as its own function (rather than inlined into issues()) since a
+    second deterministic source is plausible again later."""
     try:
         with open(path) as f:
             state = json.load(f)
@@ -247,16 +249,14 @@ def _load_active_alerts(path, source):
 
 async def issues(request):
     """Surfaces currently-active issues from the fleet watchdog (service down,
-    new log errors, stop-loss breaches, unattributed orders) and the fleet
-    review agent (pending fix proposals awaiting approval) so they're visible
-    on the dashboard itself, not just as a Telegram ping someone might miss.
-    Reads each source's own state file rather than re-implementing any
-    detection here -- one place per concern decides what counts as an issue,
-    the dashboard just displays and merges. An empty/missing file is a normal
-    'nothing wrong' state, not an error."""
+    new log errors, git drift, stop-loss breaches, unattributed orders) so
+    they're visible on the dashboard itself, not just as a Telegram ping
+    someone might miss. Reads watchdog's own state file rather than
+    re-implementing any detection here -- one place decides what counts as
+    an issue, the dashboard just displays it. An empty/missing file is a
+    normal 'nothing wrong' state, not an error."""
     def _load():
-        flat = (_load_active_alerts(config.WATCHDOG_STATE_PATH, 'watchdog')
-                + _load_active_alerts(config.FLEET_REVIEW_STATE_PATH, 'fleet-review'))
+        flat = _load_active_alerts(config.WATCHDOG_STATE_PATH, 'watchdog')
         flat.sort(key=lambda i: i['first_seen'] or '', reverse=True)
         return flat
 

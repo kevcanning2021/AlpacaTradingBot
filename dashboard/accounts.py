@@ -77,7 +77,7 @@ AGENTS_OVERVIEW = [
     {
         'id': 'research_agent',
         'label': 'Research Agent',
-        'role': "Double-checks a candidate entry against the news (Claude + web search) before it's placed, and can veto it. Reinstated 2026-08-27 for Nova, extended to Main and Sofi on 2026-08-28 -- each bot runs its own independent copy.",
+        'role': "DISABLED 2026-08-31 (RESEARCH_AGENT_VETO_ENABLED=false on all 3 bots) -- Anthropic API credits not being kept funded. When it was on: double-checked a candidate entry against the news (Claude + web search) before it was placed, and could veto it. Fail-open by design, so disabling it changed no actual trading behavior -- it was already a no-op once credits first ran out. Decision history below is preserved.",
         'monitored': True,
     },
 ]

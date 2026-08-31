@@ -36,16 +36,6 @@ WATCHDOG_STATE_PATH = os.getenv(
     'WATCHDOG_STATE_PATH', '/opt/alpaca-bot-test/watchdog_state.json'
 )
 
-# Same active_alerts shape as WATCHDOG_STATE_PATH, written by the fleet
-# review agent (/opt/fleet-review-agent, 2026-08-28) for its pending
-# medium/high-risk proposals -- a separate file rather than sharing
-# watchdog_state.json so the two independently-scheduled writers (15-min
-# watchdog cron, 2-hourly review agent) can never race on the same file.
-# /api/issues below merges both sources.
-FLEET_REVIEW_STATE_PATH = os.getenv(
-    'FLEET_REVIEW_STATE_PATH', '/opt/fleet-review-agent/fleet_review_state.json'
-)
-
 DASHBOARD_PASSWORD_HASH = os.getenv('DASHBOARD_PASSWORD_HASH', '')
 DASHBOARD_SESSION_SECRET = os.getenv('DASHBOARD_SESSION_SECRET', '')
 
