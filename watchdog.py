@@ -1,6 +1,7 @@
-"""Standalone VPS watchdog: checks service health, log errors, and account
-state across all live Alpaca accounts on this VPS (Production, Test, SOFI,
-Trading 2.0); sends a Telegram alert only when something's actually wrong.
+"""Standalone VPS watchdog: checks service health, log errors, git drift, and
+account state across all live Alpaca accounts on this VPS (Production, Test,
+SOFI, Trading 2.0); sends a Telegram alert only when something's actually
+wrong.
 
 Runs from /opt/alpaca-bot-test via crontab every 15 min on the VPS itself,
 independent of any Claude Code session -- see KNOWN_LIMITATIONS.md / project
@@ -14,6 +15,20 @@ isolated multi-timeframe bot on the same VPS, not part of this repo).
 Cross-account read access uses the same ALPACA_PROD_*/ALPACA_SOFI_*/
 ALPACA_TRADING2_* env var naming the dashboard already established for the
 same purpose (see dashboard/config.py).
+
+Extended again 2026-08-31 with check_git_drift(), absorbing the one
+deterministic-checkable capability from /opt/fleet-review-agent (a Claude
+tool-use loop) after the user decided not to keep funding ANTHROPIC_API_KEY
+credits. That component's real value was LLM reasoning (catching
+cross-file-consistency bugs like the 2026-08-27 SKIP_FRIDAYS/scheduler.py
+drift, or the 2026-08-29 strategy_check.py cross-account credential bug) --
+this watchdog can't replicate that, only the "is anything sitting uncommitted"
+part. Its cron entry was removed; the code is left in place untouched as
+historical record, same treatment as every other retired component on this
+box (Mini, Watcher, the old Telegram bot). Research Agent veto
+(RESEARCH_AGENT_VETO_ENABLED) was disabled the same day on all 3 bots for
+the same reason -- it was already a functional no-op under fail-open once
+credits ran out, so disabling it changed no actual trading behavior.
 
 State is kept in a small JSON file so:
 - the same issue doesn't re-alert every 15 min (only on first detection, then
@@ -44,6 +59,17 @@ SERVICES = [
     'pdt15rev-bot.service', 'trading-2-0.service',
 ]
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
+
+# Repos checked for uncommitted drift. trading-2-0 (Nova) is deliberately
+# absent -- its VPS deployment is a plain copied directory, not a git repo;
+# source of truth lives on the user's Windows machine + GitHub instead.
+GIT_REPOS = {
+    'alpaca-bot': '/opt/alpaca-bot',
+    'pdt15rev-bot': '/opt/pdt15rev-bot',
+    'alpaca-dashboard': '/opt/alpaca-dashboard',
+    'alpaca-bot-test': '/opt/alpaca-bot-test',
+    'fleet-review-agent': '/opt/fleet-review-agent',
+}
 
 # Accounts this watchdog checks positions/orders for, and whose service log
 # gets scanned for new tracebacks/ERROR lines. Test's own credentials come
@@ -146,6 +172,31 @@ def check_new_log_errors(unit, since_iso):
     return issues
 
 
+def check_git_drift():
+    """Uncommitted changes sitting in any fleet repo -- the one deterministic-
+    checkable thing the fleet-review-agent covered that this watchdog didn't
+    already (its other coverage -- service health, log errors, account state
+    -- all overlap what's already checked above; its cross-file-consistency
+    reasoning simply isn't replicable without an LLM, so that's genuinely
+    lost, not folded in here)."""
+    issues = []
+    for name, path in GIT_REPOS.items():
+        try:
+            result = subprocess.run(['git', 'status', '--short'], cwd=path,
+                                     capture_output=True, text=True, timeout=10)
+        except Exception as e:
+            issues.append((f'git_drift:{name}:error', f'{name}: failed to run git status: {e}'))
+            continue
+        if result.returncode != 0:
+            issues.append((f'git_drift:{name}:error', f'{name}: git status failed: {result.stderr.strip()[:200]}'))
+            continue
+        dirty = result.stdout.strip()
+        if dirty:
+            sample = '\n'.join(dirty.splitlines()[:10])
+            issues.append((f'git_drift:{name}', f'{name} ({path}) has uncommitted changes:\n{sample}'))
+    return issues
+
+
 def check_account(account_key, label, api_key, secret_key, seen_order_ids):
     """Checks positions and orders independently -- a failure fetching one (e.g. a
     transient Alpaca API timeout) must not skip the other, and must not crash the
@@ -214,6 +265,7 @@ def main():
     now = datetime.now(timezone.utc)
 
     all_issues = list(check_services())
+    all_issues += check_git_drift()
 
     for account_key, cfg in ACCOUNTS.items():
         account_issues, seen_order_ids = check_account(
