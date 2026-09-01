@@ -297,23 +297,46 @@ def main():
     all_issues = check_signal_health(client, watchlist, state, held_symbols, held_methods)
 
     # Once/day, after market close (16:00 ET) with a comfortable buffer for the
-    # daily bar to settle — 21:00 UTC covers ET's -4/-5 offset across DST.
-    if state.get('last_backtest_date') != now.date().isoformat() and now.hour >= 21:
+    # daily bar to settle — 21:00 UTC covers ET's -4/-5 offset across DST. Captured
+    # as a flag *before* the call (which mutates state['last_backtest_date'] to
+    # today) so the cleanup loop below can tell whether backtest/forward-test keys
+    # were actually re-evaluated this run.
+    backtest_ran = state.get('last_backtest_date') != now.date().isoformat() and now.hour >= 21
+    if backtest_ran:
         all_issues += run_daily_backtests(client, state)
 
     current_keys = {key for key, _ in all_issues}
+
+    # active_alerts[key] carries {first_seen, last_alert_at, message} -- same shape
+    # as watchdog.py's (see dashboard/config.py STRATEGY_CHECK_STATE_PATH, which
+    # reads this file the same way it reads watchdog's). 'message' refreshes every
+    # run regardless of cooldown so the dashboard always shows the latest detail.
     messages = []
     for key, msg in all_issues:
-        cooldown = BACKTEST_ALERT_COOLDOWN_SECONDS if key.startswith('backtest_') else HEALTH_ALERT_COOLDOWN_SECONDS
-        last_sent = active.get(key)
-        if last_sent is None:
-            messages.append(msg)
-            active[key] = now.isoformat()
-        elif (now - datetime.fromisoformat(last_sent)).total_seconds() > cooldown:
-            messages.append(f'[STILL ACTIVE] {msg}')
-            active[key] = now.isoformat()
+        is_daily = key.startswith('backtest_') or key.startswith('forward_test_')
+        cooldown = BACKTEST_ALERT_COOLDOWN_SECONDS if is_daily else HEALTH_ALERT_COOLDOWN_SECONDS
+        existing = active.get(key) if isinstance(active.get(key), dict) else None
+        first_seen = existing['first_seen'] if existing else now.isoformat()
+        last_alert_at = existing.get('last_alert_at') if existing else None
+        should_alert = last_alert_at is None or (
+            now - datetime.fromisoformat(last_alert_at)
+        ).total_seconds() > cooldown
+        if should_alert:
+            messages.append(msg if last_alert_at is None else f'[STILL ACTIVE] {msg}')
+            last_alert_at = now.isoformat()
+        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg}
 
+    # Daily-cadence keys (backtest_*/forward_test_*) are only re-evaluated once a
+    # day, so they must only be treated as "resolved" on a run that actually
+    # re-checked them -- otherwise every non-backtest hourly run (23 of 24) would
+    # see them missing from current_keys and delete them, defeating the cooldown
+    # entirely and re-alerting as "new" every single day instead of "still active"
+    # every 24h. Found 2026-09-01: crypto's backtest had been negative 3 days
+    # straight but active_alerts was empty every time this was checked.
     for key in list(active.keys()):
+        is_daily = key.startswith('backtest_') or key.startswith('forward_test_')
+        if is_daily and not backtest_ran:
+            continue
         if key not in current_keys:
             del active[key]
 

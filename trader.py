@@ -743,6 +743,9 @@ class TradingManager:
             pos_symbol = position_symbol(symbol)
 
             if signal == 'buy':
+                if is_crypto and not settings.CRYPTO_TRADING_ENABLED:
+                    logger.info(f"[SCANNER] Skipping {symbol} buy — crypto trading paused (negative backtest expectancy)")
+                    continue
                 if pos_symbol in current_symbols:
                     continue
                 pending_buys = sum(1 for e in executed if e['side'] == 'buy')

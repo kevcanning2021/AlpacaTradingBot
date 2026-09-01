@@ -120,3 +120,11 @@ RESEARCH_AGENT_MODEL = os.getenv('RESEARCH_AGENT_MODEL', 'claude-sonnet-5')
 # (narrow-band bounce after 10+ flat trading days) intentionally NOT ported -- n=1
 # backtest evidence, deferred to a separate follow-up once this has live results.
 DUAL_SIGNAL_BOLLINGER_ENABLED = os.getenv('DUAL_SIGNAL_BOLLINGER_ENABLED', 'false').lower() == 'true'
+
+# Paused 2026-09-01: strategy_check.py's daily re-backtest of the crypto EMA9/21
+# strategy has come back negative for 3 straight days (-1.49%, -1.49%, -1.03%/trade,
+# ~27% win rate). No crypto position was open when this was flipped. Gates new BUYs
+# only -- existing stop-loss/trailing-stop/sell logic is untouched, so any future
+# held crypto position would still be exited normally. Reversible via .env + restart
+# once the backtest turns positive again.
+CRYPTO_TRADING_ENABLED = os.getenv('CRYPTO_TRADING_ENABLED', 'true').lower() == 'true'
