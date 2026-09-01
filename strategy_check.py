@@ -43,6 +43,7 @@ from config import settings
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_check_state.json')
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
 HEALTH_ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 BACKTEST_ALERT_COOLDOWN_SECONDS = 24 * 60 * 60
 BACKTEST_LOOKBACK_BARS = 300
@@ -75,6 +76,21 @@ def _forward_test_stats(trade_history, asset_class):
     return stats
 
 
+def load_position_methods():
+    """{symbol: 'bollinger'|'ema'} for currently-held stock positions -- same file
+    trader.py persists (see its own _load_position_methods), read-only here so a
+    held position's signal health is checked against the one method that actually
+    opened it, not misjudged against the other dual-signal path it was never
+    entered under."""
+    if os.path.exists(POSITION_METHOD_FILE):
+        try:
+            with open(POSITION_METHOD_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
@@ -87,9 +103,9 @@ def save_state(state):
         json.dump(state, f)
 
 
-def check_signal_health(client, watchlist, state, held_symbols):
+def check_signal_health(client, watchlist, state, held_symbols, held_methods):
     scanner = OpportunityScanner(client)
-    results = scanner.scan(watchlist)
+    results = scanner.scan(watchlist, held_methods=held_methods)
     issues = []
     stuck = state.setdefault('stuck_sell_counts', {})
     seen = set()
@@ -275,9 +291,10 @@ def main():
 
     client = AlpacaClient()
     held_symbols = {p['symbol'] for p in client.get_positions()}
+    held_methods = load_position_methods()
     watchlist = settings.WATCHLIST + settings.CRYPTO_WATCHLIST
 
-    all_issues = check_signal_health(client, watchlist, state, held_symbols)
+    all_issues = check_signal_health(client, watchlist, state, held_symbols, held_methods)
 
     # Once/day, after market close (16:00 ET) with a comfortable buffer for the
     # daily bar to settle — 21:00 UTC covers ET's -4/-5 offset across DST.
