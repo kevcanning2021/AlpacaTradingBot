@@ -1,4 +1,4 @@
-"""Standalone VPS watchdog: checks service health, log errors, git drift, and
+﻿"""Standalone VPS watchdog: checks service health, log errors, git drift, and
 account state across all live Alpaca accounts on this VPS (Production, Test,
 SOFI, Trading 2.0); sends a Telegram alert only when something's actually
 wrong.
@@ -104,14 +104,14 @@ ACCOUNTS = {
     },
 }
 
-# Orders already investigated and confirmed not to be bugs — don't re-flag them.
+# Orders already investigated and confirmed not to be bugs â€” don't re-flag them.
 # Order IDs are UUIDs (globally unique regardless of which account placed them),
 # so one flat set safely covers all three accounts.
 KNOWN_MANUAL_ORDER_IDS = {
     'e9b313b1-7668-45f2-8544-b7bb0cc83cd2',  # 2026-07-10 rebalance, placed manually from dev machine
     '47a7e888-f544-4533-a471-8c1bdb05b7b4',  # 2026-07-13 accidental AAPL close_position() call
                                               # while unit-testing threshold logic from dev machine
-                                              # against the real client instead of a stub — see
+                                              # against the real client instead of a stub â€” see
                                               # project memory Lesson #7. +1.7% gain, no harm; not a
                                               # bot trade, so trader.py's streak tracking correctly
                                               # never saw it.
@@ -208,7 +208,7 @@ def check_account(account_key, label, api_key, secret_key, seen_order_ids):
     new_order_ids = set(seen_order_ids)
 
     if not api_key or not secret_key:
-        issues.append((f'{account_key}:not_configured', f'[{label}] credentials not set in this watchdog\'s .env — skipping checks for this account'))
+        issues.append((f'{account_key}:not_configured', f'[{label}] credentials not set in this watchdog\'s .env â€” skipping checks for this account'))
         return issues, new_order_ids
 
     client = AlpacaClient()
@@ -220,7 +220,7 @@ def check_account(account_key, label, api_key, secret_key, seen_order_ids):
             pnl_pct = float(p['unrealized_plpc'])
             symbol = p['symbol']
             if pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
-                issues.append((f'{account_key}:stop_loss_breach:{symbol}', f'[{label}] {symbol} is down {pnl_pct * 100:.1f}% — past the {settings.STOP_LOSS_THRESHOLD * 100:.0f}% stop-loss threshold'))
+                issues.append((f'{account_key}:stop_loss_breach:{symbol}', f'[{label}] {symbol} is down {pnl_pct * 100:.1f}% â€” past the {settings.STOP_LOSS_THRESHOLD * 100:.0f}% stop-loss threshold'))
     except Exception as e:
         issues.append((f'{account_key}:api_error:positions', f'[{label}] Failed to fetch positions from Alpaca: {e}'))
 
@@ -250,7 +250,7 @@ def check_account(account_key, label, api_key, secret_key, seen_order_ids):
             if source in (None, 'access_key'):
                 issues.append((f'{account_key}:bot_order:{oid}', f'[{label}] Bot placed a {side.upper()} on {symbol} (order {oid})'))
             else:
-                issues.append((f'{account_key}:unattributed_order:{oid}', f'[{label}] Order {oid} ({side} {symbol}) has source="{source}", not this account\'s own key — verify this wasn\'t a manual or unexpected order'))
+                issues.append((f'{account_key}:unattributed_order:{oid}', f'[{label}] Order {oid} ({side} {symbol}) has source="{source}", not this account\'s own key â€” verify this wasn\'t a manual or unexpected order'))
     except Exception as e:
         issues.append((f'{account_key}:api_error:orders', f'[{label}] Failed to fetch orders from Alpaca: {e}'))
 
@@ -264,15 +264,40 @@ def main():
     last_log_check = state['last_log_check']
     now = datetime.now(timezone.utc)
 
-    all_issues = list(check_services())
-    all_issues += check_git_drift()
+    # Each check category is isolated in its own try/except so a single failing
+    # check (e.g. a transient Alpaca API timeout) can't abort the whole cycle and
+    # silently skip every check after it -- found 2026-09-01 after old tracebacks
+    # in the log showed check_account's own exception propagating all the way up
+    # through main() and killing the run before git-drift or the other accounts
+    # were even checked.
+    all_issues = []
+    try:
+        all_issues += list(check_services())
+    except Exception as e:
+        print(f"check_services failed: {e}")
+        all_issues.append(('watchdog_internal_error:check_services', f'watchdog: check_services crashed: {e}'))
+
+    try:
+        all_issues += check_git_drift()
+    except Exception as e:
+        print(f"check_git_drift failed: {e}")
+        all_issues.append(('watchdog_internal_error:check_git_drift', f'watchdog: check_git_drift crashed: {e}'))
 
     for account_key, cfg in ACCOUNTS.items():
-        account_issues, seen_order_ids = check_account(
-            account_key, cfg['label'], cfg['api_key'], cfg['secret_key'], seen_order_ids
-        )
-        all_issues += account_issues
-        all_issues += check_new_log_errors(cfg['log_unit'], last_log_check.get(cfg['log_unit']))
+        try:
+            account_issues, seen_order_ids = check_account(
+                account_key, cfg['label'], cfg['api_key'], cfg['secret_key'], seen_order_ids
+            )
+            all_issues += account_issues
+        except Exception as e:
+            print(f"check_account({account_key}) failed: {e}")
+            all_issues.append((f'watchdog_internal_error:check_account:{account_key}', f'watchdog: check_account crashed for {cfg["label"]}: {e}'))
+
+        try:
+            all_issues += check_new_log_errors(cfg['log_unit'], last_log_check.get(cfg['log_unit']))
+        except Exception as e:
+            print(f"check_new_log_errors({account_key}) failed: {e}")
+            all_issues.append((f'watchdog_internal_error:check_new_log_errors:{account_key}', f'watchdog: check_new_log_errors crashed for {cfg["label"]}: {e}'))
         last_log_check[cfg['log_unit']] = now.isoformat()
 
     current_keys = {key for key, _ in all_issues}
