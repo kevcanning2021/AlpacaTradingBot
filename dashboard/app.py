@@ -249,19 +249,22 @@ def _load_active_alerts(path, source):
 
 async def issues(request):
     """Surfaces currently-active issues from the fleet watchdog (service down,
-    new log errors, git drift, stop-loss breaches, unattributed orders) so
-    they're visible on the dashboard itself, not just as a Telegram ping
-    someone might miss. Reads watchdog's own state file rather than
-    re-implementing any detection here -- one place decides what counts as
-    an issue, the dashboard just displays it. An empty/missing file is a
-    normal 'nothing wrong' state, not an error."""
+    new log errors, git drift, stop-loss breaches, unattributed orders) and
+    Main's strategy_check.py (stuck-sell signal health, daily backtest/
+    forward-test regressions -- merged in 2026-09-01, previously Telegram-only
+    and invisible here) so they're visible on the dashboard itself, not just as
+    a Telegram ping someone might miss. Reads each component's own state file
+    rather than re-implementing any detection here -- one place decides what
+    counts as an issue, the dashboard just displays it. An empty/missing file
+    is a normal 'nothing wrong' state, not an error."""
     def _load():
         flat = _load_active_alerts(config.WATCHDOG_STATE_PATH, 'watchdog')
+        flat += _load_active_alerts(config.STRATEGY_CHECK_STATE_PATH, 'strategy_check')
         flat.sort(key=lambda i: i['first_seen'] or '', reverse=True)
         return flat
 
     try:
-        data = get_or_fetch('watchdog', 'issues', ISSUES_TTL, _load)
+        data = get_or_fetch('issues', 'issues', ISSUES_TTL, _load)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"[dashboard] Failed to read issue state: {e}")
         return JSONResponse({'error': str(e)}, status_code=502)

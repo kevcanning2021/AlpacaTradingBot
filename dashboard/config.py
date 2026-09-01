@@ -36,6 +36,16 @@ WATCHDOG_STATE_PATH = os.getenv(
     'WATCHDOG_STATE_PATH', '/opt/alpaca-bot-test/watchdog_state.json'
 )
 
+# Same shape/purpose as WATCHDOG_STATE_PATH above, added 2026-09-01 -- Main's
+# strategy_check.py (stuck-sell signal health, daily backtest/forward-test
+# regressions) keeps its own active_alerts in its own state file and was
+# previously Telegram-only, invisible here. Its active_alerts entries now match
+# watchdog's {first_seen, last_alert_at, message} shape so _load_active_alerts
+# can read both the same way.
+STRATEGY_CHECK_STATE_PATH = os.getenv(
+    'STRATEGY_CHECK_STATE_PATH', '/opt/alpaca-bot/strategy_check_state.json'
+)
+
 DASHBOARD_PASSWORD_HASH = os.getenv('DASHBOARD_PASSWORD_HASH', '')
 DASHBOARD_SESSION_SECRET = os.getenv('DASHBOARD_SESSION_SECRET', '')
 
