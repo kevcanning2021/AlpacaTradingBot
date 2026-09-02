@@ -340,7 +340,10 @@ def main():
         # a real problem. Still sent to Telegram either way -- this only affects how
         # the dashboard displays it.
         severity = 'info' if 'currently paused because of this' in msg else 'alert'
-        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg, 'severity': severity}
+        # This whole script only ever runs against Main's account, so every
+        # issue it raises is Main's -- unlike watchdog.py, no per-key mapping
+        # needed (see its bot_for_key for the multi-bot case).
+        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg, 'severity': severity, 'bot': 'Main'}
 
     # Daily-cadence keys (backtest_*/forward_test_*) are only re-evaluated once a
     # day, so they must only be treated as "resolved" on a run that actually
