@@ -15,8 +15,9 @@ from agents.state import AGENT_DECISIONS_FILE, load_agent_decisions
 SIGNAL = {'symbol': 'AAPL', 'signal': 'buy', 'reason': 'Bollinger oversold bounce', 'price': 230.5, 'rsi': 38}
 
 
-def _article(headline='', summary='', created_at='2026-09-02T12:00:00Z'):
-    return {'headline': headline, 'summary': summary, 'created_at': created_at}
+def _article(headline='', summary='', created_at='2026-09-02T12:00:00Z', symbols=None):
+    return {'headline': headline, 'summary': summary, 'created_at': created_at,
+            'symbols': symbols if symbols is not None else ['AAPL']}
 
 
 class ResearchAgentTests(unittest.TestCase):
@@ -48,6 +49,32 @@ class ResearchAgentTests(unittest.TestCase):
         self.assertFalse(result['failed'])
         self.assertIn('lawsuit', result['risk_flags'])
         self.assertIn('lawsuit', result['reasoning'])
+
+    def test_broad_multi_company_article_is_ignored(self):
+        """Real bug found live 2026-09-02: a keyword match inside an article
+        tagged with many symbols (a comparison/roundup piece, not news about
+        this symbol specifically) must not count. Reproduces the exact case
+        that caused it: an 8-symbol article containing 'warns' vetoed an
+        unrelated NVDA entry."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="Gary Black Warns Tesla Risks Falling Behind in the Self-Driving Race",
+            symbols=['AMZN', 'BIDU', 'GOOG', 'GOOGL', 'NVDA', 'SKHY', 'TSLA', 'WRD'],
+        )]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_focused_article_at_the_threshold_still_counts(self):
+        """MAX_ARTICLE_SYMBOLS is a boundary, not an off-by-one trap -- an
+        article tagged with exactly the limit still counts as focused."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline='Company X sued by former partner',
+            symbols=['AAPL', 'MSFT', 'GOOGL'][:research_agent.MAX_ARTICLE_SYMBOLS],
+        )]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertTrue(result['veto'])
 
     def test_red_flag_in_summary_also_vetoes(self):
         """Keyword matching checks headline + summary combined -- a flag
