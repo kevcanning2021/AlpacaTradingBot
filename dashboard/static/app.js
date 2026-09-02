@@ -108,49 +108,63 @@ function healthBadge(health) {
     : '<span class="badge badge-red" title="' + (health.detail || '').replace(/"/g, '&quot;') + '">Problem</span>';
 }
 
-function issueIcon(issuesForThisBot) {
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function issueFlag(issuesForThisBot) {
+  return (issuesForThisBot && issuesForThisBot.length) ? '<span class="issue-flag">⚠️</span>' : '';
+}
+
+// Always-visible text, not hover/tap-to-reveal -- hover doesn't work on mobile
+// (no hover state on a touchscreen), and tap-to-expand was rejected too:
+// the actual message should just be there, scoped to the bot it's about,
+// not hidden behind an interaction.
+function issueText(issuesForThisBot) {
   if (!issuesForThisBot || !issuesForThisBot.length) return '';
-  const tip = issuesForThisBot.map((i) => i.message).join('\n\n').replace(/"/g, '&quot;');
-  return `<span class="issue-icon" title="${tip}">⚠️</span>`;
+  return issuesForThisBot.map((i) =>
+    `<div class="agent-issue${i.severity === 'info' ? ' info' : ''}">${escapeHtml(i.message)}</div>`
+  ).join('');
 }
 
 function renderAgentsOverview(agents, issues) {
-  // Full error text used to live in an always-visible "Attention Needed" panel
-  // -- user asked for that gone from normal view, replaced by a small icon on
-  // whichever bot it's about (hover for the actual message), so 'Working'
-  // still just looks like 'Working' at a glance. Skipped when the health
-  // badge already says 'Problem' (healthy === false) -- that's already the
-  // loud signal, a second icon on top would just be redundant noise.
+  // Full error text used to live in one shared always-visible "Attention
+  // Needed" panel -- replaced with a small warning flag plus the message
+  // shown directly under the bot it's actually about, so it's still all
+  // visible at a glance but organized per-bot instead of one combined dump.
   const byBot = {};
   for (const i of (issues || [])) {
     (byBot[i.bot] = byBot[i.bot] || []).push(i);
   }
   const el = document.getElementById('agents-overview');
   el.innerHTML = agents.map((a) => {
-    const showIcon = a.health && a.health.healthy !== false;
+    const botIssues = byBot[a.label];
     return `
     <div class="agent-row">
       <div class="agent-row-top">
         <span class="agent-label-group">
           <span class="agent-label">${a.label}</span>
-          ${showIcon ? issueIcon(byBot[a.label]) : ''}
+          ${issueFlag(botIssues)}
         </span>
         ${healthBadge(a.health)}
       </div>
       <div class="agent-role">${a.role}</div>
       ${a.health && a.health.detail && a.health.healthy !== false ? `<div class="agent-detail">${a.health.detail}</div>` : ''}
+      ${issueText(botIssues)}
     </div>`;
   }).join('');
 }
 
 function renderInfraIssues(issues) {
   // Issues not tied to any specific bot (this dashboard's/watchdog's own repo
-  // drift, an internal watchdog crash, etc.) -- same small-icon treatment,
+  // drift, an internal watchdog crash, etc.) -- same flag+text treatment,
   // just anchored next to the Agents heading instead of a bot row since
   // there's no bot card for them to sit on.
-  const el = document.getElementById('infra-issue-icon');
-  if (!el) return;
-  el.innerHTML = issueIcon((issues || []).filter((i) => i.bot === 'Infra'));
+  const infra = (issues || []).filter((i) => i.bot === 'Infra');
+  const flagEl = document.getElementById('infra-issue-icon');
+  const textEl = document.getElementById('infra-issue-text');
+  if (flagEl) flagEl.innerHTML = issueFlag(infra);
+  if (textEl) textEl.innerHTML = issueText(infra);
 }
 
 function renderResearchAgentDecisions(decisions) {

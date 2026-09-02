@@ -1,11 +1,10 @@
-// Bumped v6 -> v7: index.html/style.css/app.js changed again (issues now
-// shown as small per-bot icons instead of the always-visible text panel).
-// Reminder: bumping this version is what actually makes a shell-file change
-// visible to an already-open browser -- the SW only detects an update by
-// byte-diffing sw.js itself, so editing app.js/style.css/index.html without
-// also bumping this touches nothing until this file changes too. Bump it
-// EVERY time, not just when it's convenient to remember.
-const SHELL_CACHE = 'shell-v7';
+// Bumped v7 -> v8: index.html/style.css/app.js changed again -- hover-based
+// tooltips don't work on mobile (no hover state on a touchscreen), so issue
+// text is back to always-visible, just scoped per-bot instead of one shared
+// panel. Reminder: bumping this version is what actually makes a shell-file
+// change visible to an already-open browser -- the SW only detects an update
+// by byte-diffing sw.js itself. Bump it EVERY time, not just when convenient.
+const SHELL_CACHE = 'shell-v8';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

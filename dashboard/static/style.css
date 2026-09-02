@@ -53,12 +53,16 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #2a2d35; }
 .positive { color: #4ade80; }
 .negative { color: #f87171; }
 
-/* Small hover-for-detail indicator, replacing the old always-visible full-text
-   "Attention Needed" panel -- sits next to a bot's label (agent-label-group)
-   or the Agents heading (infra-issue-icon), title attribute carries the
-   actual message(s) so nothing shows by default beyond the icon itself. */
-.issue-icon { cursor: help; font-size: 0.9rem; }
+/* Quick at-a-glance flag next to a bot's label (or the Agents heading, for
+   issues not tied to any bot) -- the actual message renders separately as
+   .agent-issue below, always visible (no hover/tap needed -- hover doesn't
+   exist on mobile, and tap-to-reveal was rejected too: it should just be
+   there, scoped to the bot it's about). */
+.issue-flag { font-size: 0.9rem; }
 #infra-issue-icon:not(:empty) { margin-left: 6px; }
+.agent-issue { font-size: 0.8rem; color: #fca5a5; white-space: pre-wrap; margin-top: 4px; }
+.agent-issue.info { color: #fbbf24; }
+#infra-issue-text:not(:empty) { margin-bottom: 10px; }
 
 #offline-banner {
   text-align: center; background: #7c2d12; color: #fed7aa;
