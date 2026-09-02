@@ -73,19 +73,28 @@ function money(v) {
 async function refresh() {
   const banner = document.getElementById('offline-banner');
   try {
-    const calls = [
-      api('/api/agents-overview').then((r) => r.json()).then(renderAgentsOverview),
-      api('/api/research-agent/decisions').then((r) => r.json()).then(renderResearchAgentDecisions),
-      api('/api/issues').then((r) => r.json()).then(renderIssues),
-    ];
+    // agents-overview and issues are fetched together (not independently, like
+    // before) because issues now render AS per-bot icons on the agent rows
+    // themselves rather than as their own always-visible text panel -- see
+    // renderAgentsOverview/renderInfraIssues.
+    const [agents, decisions, issues] = await Promise.all([
+      api('/api/agents-overview').then((r) => r.json()),
+      api('/api/research-agent/decisions').then((r) => r.json()),
+      api('/api/issues').then((r) => r.json()),
+    ]);
+    renderAgentsOverview(agents, issues);
+    renderResearchAgentDecisions(decisions);
+    renderInfraIssues(issues);
+
+    const accountCalls = [];
     if (currentAccount) {
-      calls.push(
+      accountCalls.push(
         api(`/api/accounts/${currentAccount}/summary`).then((r) => r.json()).then(renderSummary),
         api(`/api/accounts/${currentAccount}/positions`).then((r) => r.json()).then(renderPositions),
         api(`/api/accounts/${currentAccount}/orders`).then((r) => r.json()).then(renderOrders),
       );
     }
-    await Promise.all(calls);
+    await Promise.all(accountCalls);
     banner.classList.add('hidden');
   } catch (e) {
     banner.classList.remove('hidden');
@@ -99,17 +108,49 @@ function healthBadge(health) {
     : '<span class="badge badge-red" title="' + (health.detail || '').replace(/"/g, '&quot;') + '">Problem</span>';
 }
 
-function renderAgentsOverview(agents) {
+function issueIcon(issuesForThisBot) {
+  if (!issuesForThisBot || !issuesForThisBot.length) return '';
+  const tip = issuesForThisBot.map((i) => i.message).join('\n\n').replace(/"/g, '&quot;');
+  return `<span class="issue-icon" title="${tip}">⚠️</span>`;
+}
+
+function renderAgentsOverview(agents, issues) {
+  // Full error text used to live in an always-visible "Attention Needed" panel
+  // -- user asked for that gone from normal view, replaced by a small icon on
+  // whichever bot it's about (hover for the actual message), so 'Working'
+  // still just looks like 'Working' at a glance. Skipped when the health
+  // badge already says 'Problem' (healthy === false) -- that's already the
+  // loud signal, a second icon on top would just be redundant noise.
+  const byBot = {};
+  for (const i of (issues || [])) {
+    (byBot[i.bot] = byBot[i.bot] || []).push(i);
+  }
   const el = document.getElementById('agents-overview');
-  el.innerHTML = agents.map((a) => `
+  el.innerHTML = agents.map((a) => {
+    const showIcon = a.health && a.health.healthy !== false;
+    return `
     <div class="agent-row">
       <div class="agent-row-top">
-        <span class="agent-label">${a.label}</span>
+        <span class="agent-label-group">
+          <span class="agent-label">${a.label}</span>
+          ${showIcon ? issueIcon(byBot[a.label]) : ''}
+        </span>
         ${healthBadge(a.health)}
       </div>
       <div class="agent-role">${a.role}</div>
       ${a.health && a.health.detail && a.health.healthy !== false ? `<div class="agent-detail">${a.health.detail}</div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+function renderInfraIssues(issues) {
+  // Issues not tied to any specific bot (this dashboard's/watchdog's own repo
+  // drift, an internal watchdog crash, etc.) -- same small-icon treatment,
+  // just anchored next to the Agents heading instead of a bot row since
+  // there's no bot card for them to sit on.
+  const el = document.getElementById('infra-issue-icon');
+  if (!el) return;
+  el.innerHTML = issueIcon((issues || []).filter((i) => i.bot === 'Infra'));
 }
 
 function renderResearchAgentDecisions(decisions) {
@@ -132,57 +173,6 @@ function renderResearchAgentDecisions(decisions) {
     tbody.appendChild(detail);
   });
   if (!decisions.length) tbody.innerHTML = '<tr><td colspan="6">No decisions logged yet</td></tr>';
-}
-
-const ISSUE_SOURCE_LABELS = {
-  'watchdog': 'watchdog',
-  'strategy_check': 'strategy check',
-  'fleet-review': 'fleet review',  // retired 2026-08-31; kept in case old state ever lingers
-};
-
-// Fixed display order so groups don't jump around between polls -- matches
-// the account ordering used everywhere else on the dashboard (Main/Sofi/Nova),
-// with Infra (dashboard/watchdog's own repo, retired components) last since
-// it's not a trading bot.
-const BOT_GROUP_ORDER = ['Main', 'Sofi', 'Nova', 'Infra'];
-
-function renderIssues(issues) {
-  const card = document.getElementById('issues-card');
-  const body = document.getElementById('issues-body');
-  card.classList.remove('issues-alert', 'issues-clear', 'issues-info');
-  if (!issues.length) {
-    card.classList.add('issues-clear');
-    body.innerHTML = 'All clear — no active issues.';
-    return;
-  }
-  // 'info' issues are known and already handled (e.g. crypto trading paused
-  // because its backtest went negative) -- still worth showing so it's clear
-  // why, but shouldn't look like something needs attention. Only escalate the
-  // whole card to the red alert state if at least one issue actually needs a
-  // look; an all-info set gets the calmer 'tracking' treatment instead.
-  const needsAttention = issues.some((i) => i.severity !== 'info');
-  card.classList.add(needsAttention ? 'issues-alert' : 'issues-info');
-
-  // Grouped per-bot (not one flat list) so it's immediately clear which bot
-  // each issue belongs to, rather than having to read every message to tell.
-  const byBot = new Map();
-  for (const i of issues) {
-    if (!byBot.has(i.bot)) byBot.set(i.bot, []);
-    byBot.get(i.bot).push(i);
-  }
-  const orderedBots = [...BOT_GROUP_ORDER.filter((b) => byBot.has(b)),
-                        ...[...byBot.keys()].filter((b) => !BOT_GROUP_ORDER.includes(b))];
-
-  body.innerHTML = orderedBots.map((bot) => `
-    <div class="issue-group">
-      <div class="issue-group-label">${bot}</div>
-      ${byBot.get(bot).map((i) => `
-        <div class="issue-row${i.severity === 'info' ? ' info' : ''}">
-          <span class="tag">${ISSUE_SOURCE_LABELS[i.source] || i.source}</span>
-          <div class="issue-message">${i.message}</div>
-          <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
-        </div>`).join('')}
-    </div>`).join('');
 }
 
 function renderSummary(s) {
