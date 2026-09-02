@@ -69,6 +69,15 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #2a2d35; }
 .issue-row.info .issue-message { color: #fbbf24; }
 .issue-since { font-size: 0.75rem; color: #888; margin-top: 2px; }
 
+.issue-group { margin-bottom: 4px; }
+.issue-group:last-child { margin-bottom: 0; }
+.issue-group-label {
+  font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #9ca3af; padding-top: 6px; margin-bottom: 2px;
+}
+.issue-group:first-child .issue-group-label { padding-top: 0; }
+.issue-group .issue-row:last-child { border-bottom: none; }
+
 #offline-banner {
   text-align: center; background: #7c2d12; color: #fed7aa;
   padding: 8px; border-radius: 8px;

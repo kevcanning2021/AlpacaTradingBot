@@ -140,6 +140,12 @@ const ISSUE_SOURCE_LABELS = {
   'fleet-review': 'fleet review',  // retired 2026-08-31; kept in case old state ever lingers
 };
 
+// Fixed display order so groups don't jump around between polls -- matches
+// the account ordering used everywhere else on the dashboard (Main/Sofi/Nova),
+// with Infra (dashboard/watchdog's own repo, retired components) last since
+// it's not a trading bot.
+const BOT_GROUP_ORDER = ['Main', 'Sofi', 'Nova', 'Infra'];
+
 function renderIssues(issues) {
   const card = document.getElementById('issues-card');
   const body = document.getElementById('issues-body');
@@ -156,11 +162,26 @@ function renderIssues(issues) {
   // look; an all-info set gets the calmer 'tracking' treatment instead.
   const needsAttention = issues.some((i) => i.severity !== 'info');
   card.classList.add(needsAttention ? 'issues-alert' : 'issues-info');
-  body.innerHTML = issues.map((i) => `
-    <div class="issue-row${i.severity === 'info' ? ' info' : ''}">
-      <span class="tag">${ISSUE_SOURCE_LABELS[i.source] || i.source}</span>
-      <div class="issue-message">${i.message}</div>
-      <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
+
+  // Grouped per-bot (not one flat list) so it's immediately clear which bot
+  // each issue belongs to, rather than having to read every message to tell.
+  const byBot = new Map();
+  for (const i of issues) {
+    if (!byBot.has(i.bot)) byBot.set(i.bot, []);
+    byBot.get(i.bot).push(i);
+  }
+  const orderedBots = [...BOT_GROUP_ORDER.filter((b) => byBot.has(b)),
+                        ...[...byBot.keys()].filter((b) => !BOT_GROUP_ORDER.includes(b))];
+
+  body.innerHTML = orderedBots.map((bot) => `
+    <div class="issue-group">
+      <div class="issue-group-label">${bot}</div>
+      ${byBot.get(bot).map((i) => `
+        <div class="issue-row${i.severity === 'info' ? ' info' : ''}">
+          <span class="tag">${ISSUE_SOURCE_LABELS[i.source] || i.source}</span>
+          <div class="issue-message">${i.message}</div>
+          <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
+        </div>`).join('')}
     </div>`).join('');
 }
 

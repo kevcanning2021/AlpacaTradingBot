@@ -1,9 +1,10 @@
-// Bumped v4 -> v5: style.css/app.js changed (issue severity styling). Note for
-// next time: bumping this version is what actually makes a shell-file change
+// Bumped v5 -> v6: style.css/app.js changed again (issues grouped per-bot).
+// Reminder: bumping this version is what actually makes a shell-file change
 // visible to an already-open browser -- the SW only detects an update by
 // byte-diffing sw.js itself, so editing app.js/style.css/index.html without
-// also bumping this touches nothing until this file changes too.
-const SHELL_CACHE = 'shell-v5';
+// also bumping this touches nothing until this file changes too. Bump it
+// EVERY time, not just when it's convenient to remember.
+const SHELL_CACHE = 'shell-v6';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

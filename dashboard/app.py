@@ -243,7 +243,7 @@ def _load_active_alerts(path, source):
     active = state.get('active_alerts', {})
     return [
         {'key': key, 'message': v.get('message', ''), 'first_seen': v.get('first_seen'),
-         'source': source, 'severity': v.get('severity', 'alert')}
+         'source': source, 'severity': v.get('severity', 'alert'), 'bot': v.get('bot', 'Infra')}
         for key, v in active.items() if isinstance(v, dict)
     ]
 
