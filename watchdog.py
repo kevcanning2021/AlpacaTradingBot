@@ -53,19 +53,28 @@ SERVICES = [
     # accounts). alpaca-telegram-bot.service also excluded: retired the same
     # day, redundant with the dashboard once it correctly separated
     # Main/Sofi/Nova (it had drifted to silently reporting Nova's data under
-    # a still-"test account"-labeled bot). Both are deliberately
-    # stopped+disabled -- alerting on either being inactive would just be noise.
+    # a still-"test account"-labeled bot). pdt15rev-bot.service excluded:
+    # retired 2026-09-02 -- its own strategy hardly ever traded (single
+    # symbol, once-per-day setup window); the SOFI account was repurposed
+    # for sofi-bot.service instead (a clone of Main's validated dual-signal
+    # scanner, different watchlist for real diversification). All three are
+    # deliberately stopped+disabled -- alerting on any being inactive would
+    # just be noise.
     'alpaca-bot.service', 'alpaca-dashboard.service',
-    'pdt15rev-bot.service', 'trading-2-0.service',
+    'sofi-bot.service', 'trading-2-0.service',
 ]
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 
 # Repos checked for uncommitted drift. trading-2-0 (Nova) is deliberately
 # absent -- its VPS deployment is a plain copied directory, not a git repo;
 # source of truth lives on the user's Windows machine + GitHub instead.
+# pdt15rev-bot removed 2026-09-02 (retired, see SERVICES comment) -- its repo
+# is left untouched as historical record but nothing will commit to it again,
+# so drift-checking it would just be permanent noise. sofi-bot added in its
+# place (a separate clone of AlpacaTradingBot:production, own .git).
 GIT_REPOS = {
     'alpaca-bot': '/opt/alpaca-bot',
-    'pdt15rev-bot': '/opt/pdt15rev-bot',
+    'sofi-bot': '/opt/sofi-bot',
     'alpaca-dashboard': '/opt/alpaca-dashboard',
     'alpaca-bot-test': '/opt/alpaca-bot-test',
     'fleet-review-agent': '/opt/fleet-review-agent',
@@ -90,9 +99,11 @@ ACCOUNTS = {
     # own settings.ALPACA_API_KEY/SECRET_KEY, unchanged) was reassigned to
     # trading-2-0 -- see the 'trading2' entry below, which now points at the
     # same account under its correct current label.
+    # Same account/credentials as always -- only the bot running against it
+    # changed 2026-09-02 (pdt15rev-bot retired -> sofi-bot, see SERVICES).
     'sofi': {
         'label': 'SOFI',
-        'log_unit': 'pdt15rev-bot.service',
+        'log_unit': 'sofi-bot.service',
         'api_key': os.getenv('ALPACA_API_KEY_SOFI', ''),
         'secret_key': os.getenv('ALPACA_SECRET_KEY_SOFI', ''),
     },
