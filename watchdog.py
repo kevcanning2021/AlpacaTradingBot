@@ -115,6 +115,48 @@ ACCOUNTS = {
     },
 }
 
+# Maps an issue key back to which bot it's actually about, so the dashboard can
+# group issues per-bot instead of one flat list -- added 2026-09-02 after the
+# user pointed out a flat list makes it hard to tell which bot an issue belongs
+# to at a glance. Uses the same user-facing nicknames as dashboard/accounts.py
+# (Main/Sofi/Nova), not this file's own internal ACCOUNTS labels
+# (Production/SOFI/Trading 2.0), so the grouping matches what's shown
+# everywhere else on the dashboard. Everything not tied to a specific trading
+# bot (this watchdog's own repo, the dashboard's own service/repo, the retired
+# fleet-review-agent) groups under 'Infra'.
+SERVICE_TO_BOT = {
+    'alpaca-bot.service': 'Main',
+    'sofi-bot.service': 'Sofi',
+    'trading-2-0.service': 'Nova',
+    'alpaca-dashboard.service': 'Infra',
+}
+REPO_TO_BOT = {
+    'alpaca-bot': 'Main',
+    'sofi-bot': 'Sofi',
+    'alpaca-dashboard': 'Infra',
+    'alpaca-bot-test': 'Infra',
+    'fleet-review-agent': 'Infra',
+}
+ACCOUNT_KEY_TO_BOT = {
+    'production': 'Main',
+    'sofi': 'Sofi',
+    'trading2': 'Nova',
+}
+
+
+def bot_for_key(key: str) -> str:
+    prefix = key.split(':', 1)[0]
+    if prefix == 'service_down' or prefix == 'log_errors':
+        return SERVICE_TO_BOT.get(key.split(':', 1)[1], 'Infra')
+    if prefix == 'git_drift':
+        return REPO_TO_BOT.get(key.split(':')[1], 'Infra')
+    if prefix == 'watchdog_internal_error':
+        parts = key.split(':')
+        if len(parts) >= 3 and parts[1] in ('check_account', 'check_new_log_errors'):
+            return ACCOUNT_KEY_TO_BOT.get(parts[2], 'Infra')
+        return 'Infra'
+    return ACCOUNT_KEY_TO_BOT.get(prefix, 'Infra')
+
 # Orders already investigated and confirmed not to be bugs â€” don't re-flag them.
 # Order IDs are UUIDs (globally unique regardless of which account placed them),
 # so one flat set safely covers all three accounts.
@@ -330,7 +372,7 @@ def main():
         if should_alert:
             messages.append(msg if last_alert_at is None else f'[STILL ACTIVE] {msg}')
             last_alert_at = now.isoformat()
-        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg}
+        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg, 'bot': bot_for_key(key)}
 
     for key in list(active.keys()):
         if key not in current_keys:
