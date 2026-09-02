@@ -65,7 +65,13 @@ AGENTS_OVERVIEW = [
     {
         'id': 'sofi',
         'label': 'Sofi',
-        'role': 'Its own small account, trades SOFI stock only.',
+        'role': "Repurposed 2026-09-02: the old SOFI-only reversal bot (pdt15rev-bot, single "
+                "symbol, once-per-day setup window) hardly ever traded, so it was retired and "
+                "this account now runs sofi-bot -- a clone of Main's validated dual-signal "
+                "(Bollinger+EMA) scanner with its own diversified watchlist (JPM, V, KO, WMT, "
+                "AMD, COST, JNJ) and position sizing scaled to its ~$50 equity ($12/position, "
+                "max 3 concurrent). Same account, deliberately different symbols from Main/Nova "
+                "for real diversification, not duplicated signals.",
         'monitored': True,
     },
     {
