@@ -134,6 +134,12 @@ function renderResearchAgentDecisions(decisions) {
   if (!decisions.length) tbody.innerHTML = '<tr><td colspan="6">No decisions logged yet</td></tr>';
 }
 
+const ISSUE_SOURCE_LABELS = {
+  'watchdog': 'watchdog',
+  'strategy_check': 'strategy check',
+  'fleet-review': 'fleet review',  // retired 2026-08-31; kept in case old state ever lingers
+};
+
 function renderIssues(issues) {
   const card = document.getElementById('issues-card');
   const body = document.getElementById('issues-body');
@@ -147,7 +153,7 @@ function renderIssues(issues) {
   card.classList.add('issues-alert');
   body.innerHTML = issues.map((i) => `
     <div class="issue-row">
-      <span class="tag">${i.source === 'fleet-review' ? 'fleet review' : 'watchdog'}</span>
+      <span class="tag">${ISSUE_SOURCE_LABELS[i.source] || i.source}</span>
       <div class="issue-message">${i.message}</div>
       <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
     </div>`).join('');
