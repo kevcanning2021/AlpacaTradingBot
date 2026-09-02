@@ -9,6 +9,7 @@ ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY', '')
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets/v2'
 DATA_BASE_URL = 'https://data.alpaca.markets/v2'
 CRYPTO_DATA_BASE_URL = 'https://data.alpaca.markets/v1beta3/crypto/us'
+NEWS_BASE_URL = 'https://data.alpaca.markets/v1beta1/news'  # different version path than the above, same credentials
 
 # Market Hours (ET)
 MARKET_OPEN_HOUR = 9

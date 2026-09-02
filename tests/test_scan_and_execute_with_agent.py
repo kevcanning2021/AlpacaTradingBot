@@ -50,9 +50,18 @@ BUY_SIGNAL = {'symbol': 'BTC/USD', 'signal': 'buy', 'reason': 'Donchian breakout
 class ScanAndExecuteAgentWiringTests(unittest.TestCase):
     def setUp(self):
         self._orig_veto = settings.RESEARCH_AGENT_VETO_ENABLED
+        # This whole file tests against BTC/USD -- must not depend on whatever
+        # CRYPTO_TRADING_ENABLED happens to be in the real .env (paused
+        # 2026-09-01 after a negative backtest) or every buy here gets
+        # silently skipped by that gate before ever reaching research_propose,
+        # which is what these tests exist to verify. Found 2026-09-02 when the
+        # full suite was run for the first time since that env change.
+        self._orig_crypto_enabled = settings.CRYPTO_TRADING_ENABLED
+        settings.CRYPTO_TRADING_ENABLED = True
 
     def tearDown(self):
         settings.RESEARCH_AGENT_VETO_ENABLED = self._orig_veto
+        settings.CRYPTO_TRADING_ENABLED = self._orig_crypto_enabled
 
     def test_veto_disabled_by_default_agent_never_called(self):
         """Default config (RESEARCH_AGENT_VETO_ENABLED=False) must place the
@@ -80,7 +89,7 @@ class ScanAndExecuteAgentWiringTests(unittest.TestCase):
         with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]), \
              patch('trader.research_propose', return_value={'veto': True, 'confidence': 0.9, 'reasoning': 'earnings miss', 'risk_flags': [], 'failed': False}) as mock_propose:
             result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
-        mock_propose.assert_called_once_with(BUY_SIGNAL)
+        mock_propose.assert_called_once_with(BUY_SIGNAL, client=client)
         client.create_order.assert_not_called()
         self.assertEqual(result['executed'], [])
 

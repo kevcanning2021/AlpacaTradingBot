@@ -198,7 +198,7 @@ class VetoCoversBothMethodsTests(unittest.TestCase):
                                                               'reasoning': 'earnings miss', 'risk_flags': [],
                                                               'failed': False}) as mock_propose:
             result = tm.scan_and_execute(watchlist=['AAPL'], position_size_usd=500, max_positions=5)
-        mock_propose.assert_called_once_with(BOLLINGER_BUY)
+        mock_propose.assert_called_once_with(BOLLINGER_BUY, client=client)
         client.create_order.assert_not_called()
         self.assertEqual(result['executed'], [])
         self.assertNotIn('AAPL', tm.position_methods)  # never opened, nothing to track
@@ -214,7 +214,7 @@ class VetoCoversBothMethodsTests(unittest.TestCase):
                                                               'reasoning': 'earnings miss', 'risk_flags': [],
                                                               'failed': False}) as mock_propose:
             result = tm.scan_and_execute(watchlist=['MSFT'], position_size_usd=500, max_positions=5)
-        mock_propose.assert_called_once_with(EMA_BUY)
+        mock_propose.assert_called_once_with(EMA_BUY, client=client)
         client.create_order.assert_not_called()
         self.assertEqual(result['executed'], [])
 
