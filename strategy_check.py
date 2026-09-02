@@ -234,10 +234,18 @@ def run_daily_backtests(client, state):
 
         aggregate_positive = result['expectancy_pct'] > 0
         if not aggregate_positive:
+            # Note whether trading on this asset class is already paused so the alert
+            # doesn't read as an unaddressed problem -- this check runs regardless of
+            # CRYPTO_TRADING_ENABLED (it's evaluating the strategy's own expectancy, not
+            # whether we're currently acting on it), so it keeps firing daily until the
+            # backtest actually turns positive again even after we've already responded.
+            paused_note = ''
+            if label == 'crypto' and not settings.CRYPTO_TRADING_ENABLED:
+                paused_note = ' (crypto trading is currently paused because of this)'
             issues.append((
                 f'backtest_negative:{label}',
                 f'{label} backtest expectancy went negative: {result["expectancy_pct"]:.3f}%/trade '
-                f'over {result["trade_count"]} trades ({BACKTEST_LOOKBACK_BARS}-bar window)'
+                f'over {result["trade_count"]} trades ({BACKTEST_LOOKBACK_BARS}-bar window){paused_note}'
             ))
 
         flipped = [sym for sym, exp in result['leave_one_out'].items() if (exp > 0) != aggregate_positive]
