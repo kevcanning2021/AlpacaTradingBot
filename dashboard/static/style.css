@@ -58,9 +58,15 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #2a2d35; }
 .issues-card.issues-clear { color: #4ade80; }
 .issues-card.issues-clear #issues-body { font-size: 0.9rem; color: #4ade80; }
 .issues-card.issues-alert { border-color: #7f1d1d; background: #1f1416; }
+/* Known + already-mitigated issues (e.g. crypto paused because of its own
+   negative backtest) -- shown so it's clear why, but deliberately calmer
+   than issues-alert's red so it doesn't read as something needing action. */
+.issues-card.issues-info { border-color: #78350f; background: #1f1a14; }
 .issue-row { padding: 8px 0; border-bottom: 1px solid #3a2224; }
 .issue-row:last-child { border-bottom: none; padding-bottom: 0; }
 .issue-message { font-size: 0.85rem; color: #fca5a5; white-space: pre-wrap; }
+.issue-row.info { border-bottom-color: #4a3a24; }
+.issue-row.info .issue-message { color: #fbbf24; }
 .issue-since { font-size: 0.75rem; color: #888; margin-top: 2px; }
 
 #offline-banner {

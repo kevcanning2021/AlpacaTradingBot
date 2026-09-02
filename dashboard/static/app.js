@@ -143,16 +143,21 @@ const ISSUE_SOURCE_LABELS = {
 function renderIssues(issues) {
   const card = document.getElementById('issues-card');
   const body = document.getElementById('issues-body');
+  card.classList.remove('issues-alert', 'issues-clear', 'issues-info');
   if (!issues.length) {
-    card.classList.remove('issues-alert');
     card.classList.add('issues-clear');
     body.innerHTML = 'All clear — no active issues.';
     return;
   }
-  card.classList.remove('issues-clear');
-  card.classList.add('issues-alert');
+  // 'info' issues are known and already handled (e.g. crypto trading paused
+  // because its backtest went negative) -- still worth showing so it's clear
+  // why, but shouldn't look like something needs attention. Only escalate the
+  // whole card to the red alert state if at least one issue actually needs a
+  // look; an all-info set gets the calmer 'tracking' treatment instead.
+  const needsAttention = issues.some((i) => i.severity !== 'info');
+  card.classList.add(needsAttention ? 'issues-alert' : 'issues-info');
   body.innerHTML = issues.map((i) => `
-    <div class="issue-row">
+    <div class="issue-row${i.severity === 'info' ? ' info' : ''}">
       <span class="tag">${ISSUE_SOURCE_LABELS[i.source] || i.source}</span>
       <div class="issue-message">${i.message}</div>
       <div class="issue-since">Since ${niceTime(i.first_seen)}</div>
