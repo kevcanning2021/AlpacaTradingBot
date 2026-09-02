@@ -8,7 +8,7 @@ from urllib.parse import quote
 import pytz
 from config.settings import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, DATA_BASE_URL, CRYPTO_DATA_BASE_URL,
-    TIMEZONE, MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE
+    NEWS_BASE_URL, TIMEZONE, MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE
 )
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,33 @@ class AlpacaClient:
             return all_bars[-limit:]
         except Exception as e:
             logger.error(f"[get_bars] Failed to fetch bars for {symbol}: {e}")
+            return []
+
+    def get_news(self, symbol: str, lookback_hours: int = 72, limit: int = 15) -> List[Dict]:
+        """Fetch recent news articles for symbol from Alpaca's News API --
+        v1beta1, a different version path than the v2 endpoints above, but
+        the same credentials (no separate signup, no additional cost).
+        Confirmed live 2026-09-02: works for both stock and crypto symbols
+        (crypto's 'BTC/USD'-style symbol correctly matches articles tagged
+        'BTCUSD'). Returns a list of {headline, summary, created_at} dicts,
+        newest first (Alpaca's own default sort). Empty list on any error
+        (logged) or when no matching articles exist -- both are normal, not
+        exceptional; callers should not treat an empty result as a failure,
+        same convention as get_bars above."""
+        start = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        url = f'{NEWS_BASE_URL}?symbols={quote(symbol, safe="")}&start={start}&limit={limit}&sort=desc'
+        try:
+            req = urllib.request.Request(url)
+            req.add_header('APCA-API-KEY-ID', self.api_key)
+            req.add_header('APCA-API-SECRET-KEY', self.secret_key)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+            return [
+                {'headline': a.get('headline', ''), 'summary': a.get('summary', ''), 'created_at': a.get('created_at')}
+                for a in data.get('news', [])
+            ]
+        except Exception as e:
+            logger.error(f"[get_news] Failed to fetch news for {symbol}: {e}")
             return []
 
     def get_bars_multi(self, symbols: List[str], timeframe: str = '1Day', limit: int = 35) -> Dict[str, List[Dict]]:

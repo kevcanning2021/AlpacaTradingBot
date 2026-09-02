@@ -1,171 +1,114 @@
-"""Phase 0 shadow research agent -- reads a scanner signal (+ optionally
-recent bars for context), may search the web for concrete recent news, and
-returns a structured veto/confidence judgment. Zero coupling to the live
-order path as of Phase 0: nothing in trader.py/scheduler.py calls this yet
-(config/settings.py: RESEARCH_AGENT_ENABLED / RESEARCH_AGENT_VETO_ENABLED,
-both default False). See the plan at
-C:\\Users\\kevca\\.claude\\plans\\harmonic-crafting-donut.md for the full
-phased rollout this is Phase 0 of.
+"""Free, zero-cost news-based veto check -- replaced the Claude + web-search
+version 2026-09-02 after the user found the real dollar cost added up too
+fast for what it was providing ($12 burned quickly for a "double-check
+before buying" feature). Fetches recent headlines via Alpaca's own News API
+(same credentials already used for market data/trading -- no separate
+signup, no per-call cost) and scans them for a fixed list of red-flag
+keywords. Same fail-open philosophy and the exact same propose() return
+contract as the version this replaces, so trader.py's call sites and the
+dashboard's decision-history reader don't need to change.
 
-Design notes, from live verification against the real API before writing
-this (2026-08-25) -- not guessed from docs alone:
-- Uses a single client.messages.create() call with the server-side
-  web_search tool. Server tools resolve within the same call (Anthropic's
-  infra runs the search, no client-side execution loop needed) -- confirmed
-  live, not just via docs.
-- output_config's raw JSON schema composes with tools in the same call --
-  also confirmed live. The final decision text lands as the LAST text block
-  in response.content, after any thinking/server_tool_use/
-  web_search_tool_result/code_execution_tool_result blocks (web_search
-  bundles code execution under the hood; this is expected, not an error
-  condition to guard against).
-- output_config.format.schema's "number" type does NOT support
-  minimum/maximum constraints (confirmed via a real 400) -- range is
-  documented in the field description instead and enforced by nothing
-  but the prompt; downstream code must not assume confidence is always
-  in [0, 1].
-- allowed_domains rejects any domain that blocks Anthropic's crawler
-  (reuters.com and marketwatch.com both do, confirmed via real 400s) --
-  DEFAULT_ALLOWED_DOMAINS below is only what's been verified reachable.
-  Get_bars/get_bars_multi are deliberately NOT wired up as model-invoked
-  tools here -- the caller pre-fetches bars via the same alpaca_client.py
-  scanner.py already uses and passes a short summary as plain text context,
-  avoiding a custom tool-execution loop for what's currently a read-only,
-  single-symbol decision.
+Real tradeoff, stated plainly: this catches obvious, explicitly-worded red
+flags ("lawsuit", "bankruptcy", "recall", ...) in a headline, not the
+nuanced judgment a real LLM read would have given. It will miss subtler news
+that doesn't use one of these exact words, and it says nothing about news
+that's actually positive-but-irrelevant. Free forever beats
+occasionally-smarter at a real dollar cost -- the explicit call the user
+made 2026-09-02.
 """
-import json
 import logging
-import os
 from typing import Dict, List, Optional
 
-import anthropic
-
-from config import settings
 from agents.state import record_decision
 
 logger = logging.getLogger(__name__)
 
-DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "veto": {"type": "boolean"},
-        "confidence": {"type": "number", "description": "0.0 (no real read) to 1.0 (high confidence)"},
-        "reasoning": {"type": "string"},
-        "risk_flags": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["veto", "confidence", "reasoning", "risk_flags"],
-    "additionalProperties": False,
-}
+# Deliberately a plain keyword list, not a sentiment model -- easy to read,
+# easy to audit, easy to extend by hand. Case-insensitive substring match
+# against headline + summary combined.
+RED_FLAG_KEYWORDS = [
+    'lawsuit', 'sues', 'sued', 'litigation',
+    'investigation', 'investigated', 'probe', 'subpoena',
+    'fraud', 'fraudulent', 'sec charges', 'indictment', 'indicted',
+    'bankruptcy', 'bankrupt', 'chapter 11', 'insolvent', 'insolvency',
+    'recall', 'recalls', 'recalled',
+    'downgrade', 'downgraded', 'downgrades',
+    'delisted', 'delisting', 'trading halt', 'halted',
+    'restatement', 'restated', 'accounting error',
+    'default', 'defaults', 'covenant breach',
+    'layoffs', 'layoff', 'mass layoffs',
+    'resigns', 'resignation', 'steps down', 'ousted',
+    'plunge', 'plunges', 'plummet', 'plummets', 'crash', 'crashes',
+    'misses estimates', 'guidance cut', 'cuts guidance', 'warns',
+]
 
-# Only domains confirmed reachable by Anthropic's web_search crawler (2026-08-25
-# live test) -- reuters.com and marketwatch.com both rejected the request
-# outright with a 400 before this list was narrowed. Don't add a domain here
-# without checking it actually works; a bad one 400s the whole call (caught
-# below and treated as a failed call, not silently dropped from the list).
-DEFAULT_ALLOWED_DOMAINS = ["cnbc.com", "finance.yahoo.com"]
-
-SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'research_system.md')
-
-
-def _load_system_prompt() -> str:
-    with open(SYSTEM_PROMPT_PATH) as f:
-        return f.read()
-
-
-def _usage_dict(response) -> Dict:
-    return {'input_tokens': response.usage.input_tokens, 'output_tokens': response.usage.output_tokens}
+# News older than this isn't treated as a fresh reason to veto an entry -- a
+# lawsuit from 3 weeks ago is already priced in; one from 6 hours ago might
+# not be yet. 72h comfortably covers a weekend gap (Friday close -> Monday
+# scan) without reaching back into genuinely stale news.
+LOOKBACK_HOURS = 72
+NEWS_LIMIT = 15
 
 
-def _fail_open(symbol: str, reason: str, usage: Optional[Dict] = None) -> Dict:
-    """Any failure here means 'no opinion' -- the deterministic scanner
-    signal this was consuming is left exactly as-is. Per the approved plan:
-    fail toward the already-validated deterministic path, never toward
-    blocking a trade or trusting a broken/partial response. Callers must
-    treat failed=True identically to veto=False, not as a reason to skip or
-    retry inline. usage (input_tokens/output_tokens) is included whenever a
-    response actually came back -- a refusal or non-terminal stop still
-    bills real tokens, only a call that never completed at all has none."""
+def _fail_open(symbol: str, reason: str) -> Dict:
     decision = {'veto': False, 'confidence': None, 'reasoning': f'agent call failed: {reason}', 'risk_flags': [], 'failed': True}
-    if usage is not None:
-        decision['usage'] = usage
     record_decision(symbol, decision)
     logger.warning(f"[research_agent] {symbol}: failed open ({reason})")
     return decision
 
 
-def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None) -> Dict:
+def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=None) -> Dict:
     """signal: one entry from scanner.py: OpportunityScanner.scan()'s output
-    (must have 'symbol', 'signal', 'reason', 'price'; 'rsi' if present is
-    included as context). recent_bars: optional pre-fetched OHLCV bars, same
-    shape as alpaca_client.get_bars()'s return -- caller's responsibility to
-    fetch, this function makes no Alpaca API calls itself.
+    (must have 'symbol'). recent_bars is accepted for interface compatibility
+    with the version this replaces but unused -- the free version has
+    nothing to do with recent price action, only recent news. client: an
+    AlpacaClient instance, used to fetch news (keyword-only, required in
+    practice -- a missing client fails open loudly rather than silently
+    skipping the check).
 
     Returns {'veto': bool, 'confidence': float|None, 'reasoning': str,
-    'risk_flags': list[str], 'failed': bool}. Every call, success or
-    failure, is recorded via agents.state.record_decision() as an audit
-    trail -- Phase 0 has nothing reading this back to inform a future
-    decision.
+    'risk_flags': list[str], 'failed': bool} -- same shape as the version
+    this replaces, so callers and the dashboard's decision-history reader
+    don't need to change. confidence is always None here: a keyword match
+    isn't a probability, and reporting a fake precision number would be
+    worse than admitting this method doesn't have one.
     """
-    if not settings.ANTHROPIC_API_KEY:
-        return _fail_open(signal['symbol'], 'no ANTHROPIC_API_KEY configured')
-
-    bars_summary = ''
-    if recent_bars:
-        last = recent_bars[-5:]
-        bars_summary = '\n\nLast {} bars (oldest first, close prices only): {}'.format(
-            len(last), json.dumps([b.get('c') for b in last])
-        )
-
-    user_content = (
-        f"Scanner signal for {signal['symbol']}: {signal['signal']} "
-        f"(reason: {signal.get('reason', 'n/a')}, price: {signal.get('price')}, "
-        f"rsi: {signal.get('rsi', 'n/a')})." + bars_summary
-    )
+    symbol = signal['symbol']
+    if client is None:
+        return _fail_open(symbol, 'no Alpaca client provided')
 
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model=settings.RESEARCH_AGENT_MODEL,
-            max_tokens=1024,
-            system=_load_system_prompt(),
-            tools=[{
-                'type': 'web_search_20260209',
-                'name': 'web_search',
-                'max_uses': 3,
-                'allowed_domains': DEFAULT_ALLOWED_DOMAINS,
-            }],
-            output_config={'format': {'type': 'json_schema', 'schema': DECISION_SCHEMA}},
-            messages=[{'role': 'user', 'content': user_content}],
-        )
-    except anthropic.APIError as e:
-        return _fail_open(signal['symbol'], f'{type(e).__name__}: {e}')
+        articles = client.get_news(symbol, lookback_hours=LOOKBACK_HOURS, limit=NEWS_LIMIT)
+    except Exception as e:
+        return _fail_open(symbol, f'news fetch failed: {type(e).__name__}: {e}')
 
-    usage = _usage_dict(response)
+    matched = []
+    for article in articles:
+        text = f"{article.get('headline', '')} {article.get('summary', '')}".lower()
+        for keyword in RED_FLAG_KEYWORDS:
+            if keyword in text:
+                matched.append((keyword, article.get('headline', '')))
+                break  # one match is enough to flag this article
 
-    if response.stop_reason == 'refusal':
-        category = getattr(response.stop_details, 'category', 'unknown') if response.stop_details else 'unknown'
-        return _fail_open(signal['symbol'], f'model refused: {category}', usage=usage)
+    if matched:
+        risk_flags = sorted({kw for kw, _ in matched})
+        headline_examples = '; '.join(f'"{h}"' for _, h in matched[:3])
+        decision = {
+            'veto': True,
+            'confidence': None,
+            'reasoning': f'Found {len(matched)} recent article(s) with red-flag keywords {risk_flags}: {headline_examples}',
+            'risk_flags': risk_flags,
+            'failed': False,
+        }
+    else:
+        decision = {
+            'veto': False,
+            'confidence': None,
+            'reasoning': f'No red-flag keywords found in {len(articles)} recent article(s) (last {LOOKBACK_HOURS}h)',
+            'risk_flags': [],
+            'failed': False,
+        }
 
-    if response.stop_reason != 'end_turn':
-        # Covers pause_turn (a long-running server-tool turn that would need
-        # a resume loop -- not implemented for this shadow-only phase) and
-        # any other non-terminal stop_reason. Failing open here rather than
-        # guessing at a resume is the same "fail toward the deterministic
-        # path" choice as every other branch in this function.
-        return _fail_open(signal['symbol'], f'non-terminal stop_reason: {response.stop_reason}', usage=usage)
-
-    text_blocks = [b.text for b in response.content if b.type == 'text']
-    if not text_blocks:
-        return _fail_open(signal['symbol'], 'no text block in response', usage=usage)
-
-    try:
-        decision = json.loads(text_blocks[-1])
-    except json.JSONDecodeError as e:
-        return _fail_open(signal['symbol'], f'malformed JSON: {e}', usage=usage)
-
-    decision['failed'] = False
-    decision['usage'] = usage
-    record_decision(signal['symbol'], decision)
-    logger.info(f"[research_agent] {signal['symbol']}: veto={decision.get('veto')} confidence={decision.get('confidence')} "
-                f"input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']}")
+    record_decision(symbol, decision)
+    logger.info(f"[research_agent] {symbol}: veto={decision['veto']} ({len(articles)} articles checked)")
     return decision

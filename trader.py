@@ -482,7 +482,7 @@ class TradingManager:
                     'reason': f'Re-entry: pulled back {round(pullback_pct * 100, 2)}% from peak ${round(peak_price, 2)}, RSI {round(rsi, 1)} confirms momentum',
                     'price': current_price, 'rsi': round(rsi, 2),
                 }
-                decision = research_propose(reentry_sig)
+                decision = research_propose(reentry_sig, client=self.client)
                 if decision.get('veto'):
                     report['actions_taken'].append({
                         'action': 'REENTRY_SKIPPED',
@@ -757,7 +757,7 @@ class TradingManager:
                     continue
 
                 if settings.RESEARCH_AGENT_VETO_ENABLED:
-                    decision = research_propose(sig)
+                    decision = research_propose(sig, client=self.client)
                     if decision.get('veto'):
                         logger.info(f"[SCANNER] Research agent vetoed {symbol} buy — {decision.get('reasoning')}")
                         continue
