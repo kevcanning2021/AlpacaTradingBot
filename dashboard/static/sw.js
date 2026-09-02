@@ -1,5 +1,9 @@
-// Bumped v3 -> v4: index.html/app.js changed (dedicated Agents tab).
-const SHELL_CACHE = 'shell-v4';
+// Bumped v4 -> v5: style.css/app.js changed (issue severity styling). Note for
+// next time: bumping this version is what actually makes a shell-file change
+// visible to an already-open browser -- the SW only detects an update by
+// byte-diffing sw.js itself, so editing app.js/style.css/index.html without
+// also bumping this touches nothing until this file changes too.
+const SHELL_CACHE = 'shell-v5';
 const SHELL_FILES = [
   '/',
   '/static/style.css',
