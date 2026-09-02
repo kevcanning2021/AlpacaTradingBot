@@ -195,11 +195,15 @@ class AlpacaClient:
         the same credentials (no separate signup, no additional cost).
         Confirmed live 2026-09-02: works for both stock and crypto symbols
         (crypto's 'BTC/USD'-style symbol correctly matches articles tagged
-        'BTCUSD'). Returns a list of {headline, summary, created_at} dicts,
-        newest first (Alpaca's own default sort). Empty list on any error
-        (logged) or when no matching articles exist -- both are normal, not
-        exceptional; callers should not treat an empty result as a failure,
-        same convention as get_bars above."""
+        'BTCUSD'). Returns a list of {headline, summary, created_at, symbols}
+        dicts, newest first (Alpaca's own default sort) -- 'symbols' (every
+        ticker Alpaca tagged the article with, not just the one queried) lets
+        callers judge whether an article is actually focused on this symbol
+        or just a broad multi-company piece that happens to mention it; see
+        agents/research_agent.py's MAX_ARTICLE_SYMBOLS. Empty list on any
+        error (logged) or when no matching articles exist -- both are
+        normal, not exceptional; callers should not treat an empty result as
+        a failure, same convention as get_bars above."""
         start = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).strftime('%Y-%m-%dT%H:%M:%SZ')
         url = f'{NEWS_BASE_URL}?symbols={quote(symbol, safe="")}&start={start}&limit={limit}&sort=desc'
         try:
@@ -209,7 +213,8 @@ class AlpacaClient:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode())
             return [
-                {'headline': a.get('headline', ''), 'summary': a.get('summary', ''), 'created_at': a.get('created_at')}
+                {'headline': a.get('headline', ''), 'summary': a.get('summary', ''),
+                 'created_at': a.get('created_at'), 'symbols': a.get('symbols', [])}
                 for a in data.get('news', [])
             ]
         except Exception as e:

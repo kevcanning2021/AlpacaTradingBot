@@ -49,6 +49,18 @@ RED_FLAG_KEYWORDS = [
 LOOKBACK_HOURS = 72
 NEWS_LIMIT = 15
 
+# Alpaca tags an article with every ticker it mentions, not just the one
+# queried -- found live 2026-09-02: a real NVDA entry got vetoed on "warns"
+# matched inside "Gary Black Warns Tesla Risks Falling Behind in the
+# Self-Driving Race", an article tagged with 8 symbols (AMZN, BIDU, GOOG,
+# GOOGL, NVDA, SKHY, TSLA, WRD) -- a broad multi-company comparison piece,
+# not news about NVDA specifically. Compare the AAPL/"lawsuit" match from
+# the same session, tagged with just ['AAPL'] -- genuinely focused. A
+# broad-roundup article isn't good evidence about any single one of the
+# companies it mentions in passing, so articles tagged with more than this
+# many symbols are skipped entirely, for every keyword, not just 'warns'.
+MAX_ARTICLE_SYMBOLS = 3
+
 
 def _fail_open(symbol: str, reason: str) -> Dict:
     decision = {'veto': False, 'confidence': None, 'reasoning': f'agent call failed: {reason}', 'risk_flags': [], 'failed': True}
@@ -84,6 +96,8 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=No
 
     matched = []
     for article in articles:
+        if len(article.get('symbols', [])) > MAX_ARTICLE_SYMBOLS:
+            continue  # broad multi-company piece, not focused on this symbol -- see MAX_ARTICLE_SYMBOLS
         text = f"{article.get('headline', '')} {article.get('summary', '')}".lower()
         for keyword in RED_FLAG_KEYWORDS:
             if keyword in text:
