@@ -332,7 +332,15 @@ def main():
         if should_alert:
             messages.append(msg if last_alert_at is None else f'[STILL ACTIVE] {msg}')
             last_alert_at = now.isoformat()
-        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg}
+        # 'info' vs 'alert' lets the dashboard tell "known, already mitigated, just
+        # tracking until it resolves itself" apart from "needs a look" -- e.g. once
+        # crypto trading is paused because of a negative backtest, that alert stays
+        # technically active (see the backtest_ran cleanup logic above) but isn't
+        # actionable anymore, so it shouldn't render with the same visual urgency as
+        # a real problem. Still sent to Telegram either way -- this only affects how
+        # the dashboard displays it.
+        severity = 'info' if 'currently paused because of this' in msg else 'alert'
+        active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg, 'severity': severity}
 
     # Daily-cadence keys (backtest_*/forward_test_*) are only re-evaluated once a
     # day, so they must only be treated as "resolved" on a run that actually
