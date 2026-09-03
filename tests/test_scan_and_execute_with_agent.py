@@ -257,6 +257,90 @@ class ScanAndExecuteAgentWiringTests(unittest.TestCase):
             result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
         self.assertEqual(len(result['executed']), 1)
 
+    def test_stale_reentry_fired_with_no_position_or_order_is_cleared(self):
+        """Real gap found in a full fleet review 2026-09-03: if an earlier
+        buy attempt marked reentry_fired but never actually resulted in a
+        position (e.g. an order accepted then rejected asynchronously,
+        after the immediate-rejection check already added elsewhere),
+        that entry could sit there indefinitely, silently blocking a real
+        future re-entry. Now self-heals within one scan cycle."""
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        tm = make_manager(client)
+        tm.reentry_fired = {'BTCUSD'}
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[]), \
+             patch.object(tm, '_save_reentry_state') as mock_save:
+            tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(tm.reentry_fired, set())
+        mock_save.assert_called_once()
+
+    def test_stale_position_methods_with_no_position_or_order_is_cleared(self):
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        tm = make_manager(client)
+        tm.position_methods = {'BTCUSD': 'bollinger'}
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[]), \
+             patch.object(tm, '_save_position_methods') as mock_save:
+            tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(tm.position_methods, {})
+        mock_save.assert_called_once()
+
+    def test_reentry_fired_for_a_real_open_position_is_not_cleared(self):
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = [{'symbol': 'BTCUSD', 'asset_class': 'crypto'}]
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        tm = make_manager(client)
+        tm.reentry_fired = {'BTCUSD'}
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[]), \
+             patch.object(tm, '_save_reentry_state') as mock_save:
+            tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(tm.reentry_fired, {'BTCUSD'})
+        mock_save.assert_not_called()
+
+    def test_reentry_fired_with_a_still_open_order_is_not_cleared(self):
+        """A genuinely still-pending order (not yet filled, not yet
+        rejected) must not be mistaken for a failed one just because
+        there's no position yet."""
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = [{'id': 'ord-1', 'symbol': 'BTC/USD', 'status': 'accepted'}]
+        tm = make_manager(client)
+        tm.reentry_fired = {'BTCUSD'}
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[]), \
+             patch.object(tm, '_save_reentry_state') as mock_save:
+            tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(tm.reentry_fired, {'BTCUSD'})
+        mock_save.assert_not_called()
+
+    def test_reconciliation_never_touches_a_symbol_outside_this_watchlist(self):
+        """Safety scoping: reentry_fired/position_methods aren't asset-
+        class-segregated, but current_symbols/pending_order_symbols in any
+        one scan_and_execute() call only cover that call's own watchlist --
+        a stale-looking entry for a symbol scanning crypto knows nothing
+        about (e.g. a stock) must be left alone, not wrongly cleared."""
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        tm = make_manager(client)
+        tm.reentry_fired = {'AAPL'}  # not in this crypto-only watchlist
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[]), \
+             patch.object(tm, '_save_reentry_state') as mock_save:
+            tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(tm.reentry_fired, {'AAPL'})
+        mock_save.assert_not_called()
+
     def test_sell_signals_never_invoke_the_agent(self):
         """Per the approved plan, the agent only ever reviews buys the
         scanner already found -- it has no role in exits.
