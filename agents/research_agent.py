@@ -40,8 +40,18 @@ RED_FLAG_KEYWORDS = [
     'layoffs', 'layoff', 'mass layoffs',
     'resigns', 'resignation', 'steps down', 'ousted',
     'plunge', 'plunges', 'plummet', 'plummets', 'crash', 'crashes',
-    'misses estimates', 'guidance cut', 'cuts guidance', 'warns',
+    'misses estimates', 'guidance cut', 'cuts guidance',
 ]
+
+# 'warns' removed 2026-09-03 after two real false-catches in one day: the
+# multi-symbol Tesla piece below, and (after that fix) a Fed governor's
+# macro commentary on AI data centers -- tagged only to NVDA on Nova, so it
+# passed MAX_ARTICLE_SYMBOLS, but was about the broader economy, not NVDA
+# specifically. Unlike 'lawsuit'/'bankruptcy'/'recall', which describe
+# something concrete happening TO a company, 'warns' shows up constantly in
+# hedge-y analyst/macro commentary -- the genuine version ("company warns
+# investors of a miss") is already covered by 'misses estimates'/
+# 'guidance cut'.
 
 # News older than this isn't treated as a fresh reason to veto an entry -- a
 # lawsuit from 3 weeks ago is already priced in; one from 6 hours ago might
