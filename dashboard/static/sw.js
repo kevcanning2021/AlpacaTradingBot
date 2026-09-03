@@ -1,11 +1,11 @@
-// Bumped v8 -> v9: index.html/style.css/app.js changed again -- research
-// decisions/positions/orders switched from cramped multi-column <table>s
-// (no good mobile answer) to a stacked card-list layout, and the research
-// log now defaults to vetoes-only with a toggle to show everything.
-// Reminder: bumping this version is what actually makes a shell-file change
-// visible to an already-open browser -- the SW only detects an update by
-// byte-diffing sw.js itself. Bump it EVERY time, not just when convenient.
-const SHELL_CACHE = 'shell-v9';
+// Bumped v9 -> v10: style.css changed again -- added a real desktop
+// breakpoint (min-width: 860px). Before this, .screen was max-width:480px
+// unconditionally, so desktop was the same cramped single column as mobile,
+// just centered on a bigger screen. Reminder: bumping this version is what
+// actually makes a shell-file change visible to an already-open browser --
+// the SW only detects an update by byte-diffing sw.js itself. Bump it EVERY
+// time, not just when convenient.
+const SHELL_CACHE = 'shell-v10';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

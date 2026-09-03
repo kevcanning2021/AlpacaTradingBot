@@ -115,3 +115,23 @@ header { display: flex; justify-content: space-between; align-items: center; mar
   margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2d35;
   font-size: 0.8rem; color: #aaa; white-space: pre-wrap;
 }
+
+/* Real desktop layout, not just a wider mobile column -- .screen was
+   max-width:480px unconditionally before this, so "desktop" was the exact
+   same cramped single column centered on a big screen. This is deliberately
+   the one thing that changes at this breakpoint: the repetitive list
+   content (research decisions, positions, orders -- all .decision-list)
+   flows into multiple columns since there's room for it; everything else
+   (tabs, agents-overview's short row-per-bot list, the summary stat grid)
+   already reads fine wider and is left alone rather than restructured for
+   its own sake. */
+@media (min-width: 860px) {
+  .screen { max-width: 1100px; padding: 24px 32px; }
+
+  .decision-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    align-items: start;
+    gap: 10px;
+  }
+}
