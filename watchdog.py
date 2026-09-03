@@ -272,8 +272,13 @@ def check_account(account_key, label, api_key, secret_key, seen_order_ids):
         for p in client.get_positions():
             pnl_pct = float(p['unrealized_plpc'])
             symbol = p['symbol']
-            if pnl_pct <= -settings.STOP_LOSS_THRESHOLD:
-                issues.append((f'{account_key}:stop_loss_breach:{symbol}', f'[{label}] {symbol} is down {pnl_pct * 100:.1f}% â€” past the {settings.STOP_LOSS_THRESHOLD * 100:.0f}% stop-loss threshold'))
+            # Crypto's real, intentional tolerance (trader.py's own _handle_stop_loss)
+            # is CRYPTO_STOP_LOSS_THRESHOLD (15%), not the stock threshold (5%) -- using
+            # the flat stock threshold here false-alarmed on every crypto position
+            # between 5-15% down, which is normal/expected for crypto, not a breach.
+            threshold = settings.CRYPTO_STOP_LOSS_THRESHOLD if p.get('asset_class') == 'crypto' else settings.STOP_LOSS_THRESHOLD
+            if pnl_pct <= -threshold:
+                issues.append((f'{account_key}:stop_loss_breach:{symbol}', f'[{label}] {symbol} is down {pnl_pct * 100:.1f}% â€” past the {threshold * 100:.0f}% stop-loss threshold'))
     except Exception as e:
         issues.append((f'{account_key}:api_error:positions', f'[{label}] Failed to fetch positions from Alpaca: {e}'))
 
