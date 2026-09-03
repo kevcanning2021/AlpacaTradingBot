@@ -17,6 +17,7 @@ occasionally-smarter at a real dollar cost -- the explicit call the user
 made 2026-09-02.
 """
 import logging
+import re
 from typing import Dict, List, Optional
 
 from agents.state import record_decision
@@ -61,6 +62,13 @@ NEWS_LIMIT = 15
 # many symbols are skipped entirely, for every keyword, not just 'warns'.
 MAX_ARTICLE_SYMBOLS = 3
 
+# Word-boundary-matched, not a plain substring check -- found live 2026-09-03:
+# 'sues' matched inside 'issues' ("Apple issues strong holiday guidance"), the
+# mirror-image false-positive of the MAX_ARTICLE_SYMBOLS bug above. Compiled
+# once at import time, not per-call. Ported by hand from bot/research_agent.py
+# (Nova), same as the keyword list itself.
+_KEYWORD_PATTERNS = [(kw, re.compile(r'\b' + re.escape(kw) + r'\b')) for kw in RED_FLAG_KEYWORDS]
+
 
 def _fail_open(symbol: str, reason: str) -> Dict:
     decision = {'veto': False, 'confidence': None, 'reasoning': f'agent call failed: {reason}', 'risk_flags': [], 'failed': True}
@@ -99,8 +107,8 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=No
         if len(article.get('symbols', [])) > MAX_ARTICLE_SYMBOLS:
             continue  # broad multi-company piece, not focused on this symbol -- see MAX_ARTICLE_SYMBOLS
         text = f"{article.get('headline', '')} {article.get('summary', '')}".lower()
-        for keyword in RED_FLAG_KEYWORDS:
-            if keyword in text:
+        for keyword, pattern in _KEYWORD_PATTERNS:
+            if pattern.search(text):
                 matched.append((keyword, article.get('headline', '')))
                 break  # one match is enough to flag this article
 
