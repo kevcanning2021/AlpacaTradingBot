@@ -65,8 +65,12 @@ class MarketHoursScheduler:
             if scan_report.get('errors'):
                 logger.warning(f"Scanner errors: {scan_report['errors']}")
 
-            # 2. Review all open positions (including any just opened)
-            report = self.trading_manager.check_positions()
+            # 2. Review all open positions (including any just opened). Scoped to
+            # 'us_equity' -- the always-on crypto job (_check_crypto_job below) already
+            # covers crypto positions on its own schedule; calling this unscoped here
+            # would let both jobs evaluate the same crypto position concurrently during
+            # market hours, racing on reentry_fired and risking a duplicate re-entry buy.
+            report = self.trading_manager.check_positions(asset_class='us_equity')
             report['scan_report'] = scan_report
             self.last_check = report
             self.check_history.append(report)

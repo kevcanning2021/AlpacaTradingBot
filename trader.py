@@ -166,29 +166,47 @@ class TradingManager:
             positions = self.client.get_positions()
             if asset_class is not None:
                 positions = [p for p in positions if p.get('asset_class') == asset_class]
+        except Exception as e:
+            logger.error(f"Error checking positions: {e}")
+            return {'error': str(e), 'timestamp': _now()}
+
+        report = {
+            'timestamp': _now(),
+            'account_equity': None,
+            'buying_power': None,
+            'positions_checked': len(positions),
+            'actions_taken': [],
+            'errors': []
+        }
+
+        # Account fetch is only needed to size re-entry buys -- kept out of the
+        # positions try/except above so a transient failure here (KNOWN_LIMITATIONS.md
+        # documents this has happened) can't skip stop-loss/trailing-stop protection
+        # for positions that were already successfully fetched. Re-entries are simply
+        # skipped this cycle (buying_power stays None) rather than sized against stale data.
+        try:
             account = self.client.get_account()
             buying_power = float(account.get('buying_power', 0))  # decremented locally as re-entry buys fire below
+            report['account_equity'] = account.get('equity')
+            report['buying_power'] = account.get('buying_power')
+        except Exception as e:
+            logger.error(f"Error fetching account (re-entries skipped this cycle, stop-loss/trailing-stop still run): {e}")
+            report['errors'].append(f"account fetch failed: {e}")
+            buying_power = None
 
-            report = {
-                'timestamp': _now(),
-                'account_equity': account.get('equity'),
-                'buying_power': account.get('buying_power'),
-                'positions_checked': len(positions),
-                'actions_taken': [],
-                'errors': []
-            }
-
-            for position in positions:
+        for position in positions:
+            symbol = position.get('symbol', '?')
+            try:
                 symbol = position.get('symbol')
                 qty = float(position.get('qty', 0))
                 current_price = float(position.get('current_price', 0))
                 avg_entry_price = float(position.get('avg_entry_price', 0))
-                
+
                 logger.info(f"Checking {symbol}: {qty} shares @ ${current_price} (Entry: ${avg_entry_price})")
-                
+
                 # Calculate gain/loss percentage
                 pnl_pct = (current_price - avg_entry_price) / avg_entry_price if avg_entry_price > 0 else 0
-                
+
                 # First time this symbol has been observed open (a fresh position, or an
                 # already-open one from before this tracking existed) -- record it as the
                 # age reference for the reentry min-age gate below. For a position that
@@ -222,29 +240,31 @@ class TradingManager:
                 if not closed and settings.ENABLE_STOP_LOSS_ADJUSTMENT:
                     closed = self._handle_trailing_stop(symbol, position, report)
 
-                # Handle re-entries
-                if not closed and settings.ENABLE_REENTRY:
+                # Handle re-entries -- skipped (not an error) if the account fetch above failed
+                if not closed and settings.ENABLE_REENTRY and buying_power is not None:
                     buying_power = self._handle_reentry(symbol, position, pnl_pct, report, buying_power)
+            except Exception as e:
+                # One malformed/unparseable position (e.g. a halted symbol with a null
+                # price field) must not cost every other open position its protection
+                # for this cycle -- log it, record it, and keep going.
+                logger.error(f"Error processing position {symbol}, skipping it this cycle: {e}")
+                report['errors'].append(f"{symbol}: {e}")
 
-            # REENTRY_SKIPPED means the bot analyzed a pullback and decided NOT to act --
-            # no trade, no error, nothing changed. Notifying on that is noise, not signal
-            # (same reasoning that removed the STOP_LOSS_CANDIDATE advisory on 2026-07-14).
-            # Every other action type here is either a real trade open/close (*_TRIGGERED)
-            # or a genuine failure (*_ALERT, REENTRY_FAILED), so those still notify.
-            notifiable = [a for a in report['actions_taken'] if a.get('action') != 'REENTRY_SKIPPED']
-            if notifiable and self.notifier.enabled:
-                try:
-                    subject, body = self.notifier.build_position_alert_email(report)
-                    self.notifier.send(subject, body)
-                    logger.info('Position alert sent')
-                except Exception as e:
-                    logger.error(f'Failed to send position alert: {e}')
+        # REENTRY_SKIPPED means the bot analyzed a pullback and decided NOT to act --
+        # no trade, no error, nothing changed. Notifying on that is noise, not signal
+        # (same reasoning that removed the STOP_LOSS_CANDIDATE advisory on 2026-07-14).
+        # Every other action type here is either a real trade open/close (*_TRIGGERED)
+        # or a genuine failure (*_ALERT, REENTRY_FAILED), so those still notify.
+        notifiable = [a for a in report['actions_taken'] if a.get('action') != 'REENTRY_SKIPPED']
+        if notifiable and self.notifier.enabled:
+            try:
+                subject, body = self.notifier.build_position_alert_email(report)
+                self.notifier.send(subject, body)
+                logger.info('Position alert sent')
+            except Exception as e:
+                logger.error(f'Failed to send position alert: {e}')
 
-            return report
-        
-        except Exception as e:
-            logger.error(f"Error checking positions: {e}")
-            return {'error': str(e), 'timestamp': _now()}
+        return report
     
     def _handle_stop_loss(self, symbol: str, position: Dict, pnl_pct: float, report: Dict) -> bool:
         """Handle stop loss adjustments at the entry-anchored threshold. Returns True if closed.
