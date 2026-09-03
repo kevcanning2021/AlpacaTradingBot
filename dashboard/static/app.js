@@ -215,6 +215,37 @@ function renderSummary(s) {
     </div>`;
 }
 
+function renderProtectionLine(p) {
+  // Main/Sofi track a peak price and ratchet a trailing stop off it
+  // (trader.py: _handle_trailing_stop) alongside a fixed entry-anchored
+  // stop -- whichever is currently higher (tighter) is the one that
+  // actually protects the position; a trailing stop above the entry stop
+  // is what "moved up" looks like. Nova has no trailing mechanism at all,
+  // so its stop/target are shown as fixed, with no peak.
+  if (p.peak_price !== undefined) {
+    const trailing = p.trailing_stop_price;
+    const entryStop = p.entry_stop_price;
+    const trailingIsActive = trailing !== null && entryStop !== null && trailing > entryStop;
+    return `
+      <div class="item-meta">
+        <span>Peak ${money(p.peak_price)}</span>
+        <span>Entry stop ${money(entryStop)}</span>
+        <span class="${trailingIsActive ? 'trailing-active' : ''}">
+          ${trailingIsActive ? '▲ ' : ''}Trailing stop ${money(trailing)}
+        </span>
+      </div>`;
+  }
+  if (p.stop_price !== undefined) {
+    return `
+      <div class="item-meta">
+        <span>Stop ${money(p.stop_price)}</span>
+        <span>Target ${money(p.target_price)}</span>
+        <span class="item-sub">(fixed at entry, no trailing)</span>
+      </div>`;
+  }
+  return '';
+}
+
 function renderPositions(positions) {
   const list = document.getElementById('positions-list');
   list.innerHTML = '';
@@ -232,7 +263,8 @@ function renderPositions(positions) {
       <div class="item-meta">
         <span>Bought ${money(p.avg_entry_price)}</span>
         <span>Now ${money(p.current_price)}</span>
-      </div>`;
+      </div>
+      ${renderProtectionLine(p)}`;
     list.appendChild(item);
   });
   if (!positions.length) list.innerHTML = '<p class="hint">No open positions</p>';

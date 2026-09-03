@@ -46,6 +46,33 @@ STRATEGY_CHECK_STATE_PATH = os.getenv(
     'STRATEGY_CHECK_STATE_PATH', '/opt/alpaca-bot/strategy_check_state.json'
 )
 
+# Main/Sofi track a trailing peak price per open position (trader.py's
+# _handle_trailing_stop) in their own {symbol: price} state file -- not
+# Alpaca data, read directly like the paths above. Nova has no trailing-stop
+# mechanism at all (its stop_price is fixed at entry, in its own sqlite
+# journal instead -- see NOVA_JOURNAL_DB_PATH below), so there's
+# deliberately no 'nova' entry here.
+PEAK_PRICES_PATHS = {
+    'prod': os.getenv('PEAK_PRICES_PATH_MAIN', '/opt/alpaca-bot/peak_prices_state.json'),
+    'sofi': os.getenv('PEAK_PRICES_PATH_SOFI', '/opt/sofi-bot/peak_prices_state.json'),
+}
+
+# Path to Nova's sqlite trade journal -- read directly (SELECT only) for each
+# open trade's fixed stop_price/target_price, same non-Alpaca-data pattern
+# as PEAK_PRICES_PATHS above.
+NOVA_JOURNAL_DB_PATH = os.getenv('NOVA_JOURNAL_DB_PATH', '/opt/trading-2-0/data/trade_journal.db')
+
+# Mirrors trader.py's own constants (Main/Sofi's shared codebase) -- these
+# aren't read from either bot's .env (STOP_LOSS_THRESHOLD/TRAILING_STOP_
+# THRESHOLD are plain hardcoded constants there, not env-configurable), so
+# there's no way to introspect them at runtime. Duplicated here and must be
+# kept in sync by hand if trader.py's ever change, same convention already
+# used for the research-agent keyword list across repos.
+STOP_LOSS_THRESHOLD = 0.05
+TRAILING_STOP_THRESHOLD = 0.08
+CRYPTO_STOP_LOSS_THRESHOLD = 0.15
+CRYPTO_TRAILING_STOP_THRESHOLD = 0.20
+
 DASHBOARD_PASSWORD_HASH = os.getenv('DASHBOARD_PASSWORD_HASH', '')
 DASHBOARD_SESSION_SECRET = os.getenv('DASHBOARD_SESSION_SECRET', '')
 

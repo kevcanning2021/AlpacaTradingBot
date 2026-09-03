@@ -116,6 +116,12 @@ header { display: flex; justify-content: space-between; align-items: center; mar
   font-size: 0.8rem; color: #aaa; white-space: pre-wrap;
 }
 
+/* Marks whichever of entry-stop/trailing-stop is currently the tighter,
+   actually-protective level -- a trailing stop that's ratcheted above the
+   fixed entry stop (i.e. the position moved into enough profit for the
+   trailing mechanism to take over) shows here in green with an up-arrow. */
+.trailing-active { color: #4ade80; font-weight: 600; }
+
 /* Real desktop layout, not just a wider mobile column -- .screen was
    max-width:480px unconditionally before this, so "desktop" was the exact
    same cramped single column centered on a big screen. This is deliberately

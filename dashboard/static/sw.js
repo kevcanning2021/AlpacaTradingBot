@@ -1,11 +1,11 @@
-// Bumped v9 -> v10: style.css changed again -- added a real desktop
-// breakpoint (min-width: 860px). Before this, .screen was max-width:480px
-// unconditionally, so desktop was the same cramped single column as mobile,
-// just centered on a bigger screen. Reminder: bumping this version is what
-// actually makes a shell-file change visible to an already-open browser --
-// the SW only detects an update by byte-diffing sw.js itself. Bump it EVERY
-// time, not just when convenient.
-const SHELL_CACHE = 'shell-v10';
+// Bumped v10 -> v11: app.js/style.css changed again -- positions now show
+// each bot's actual stop-loss protection: Main/Sofi's peak price + trailing
+// stop (highlighted green when it's ratcheted above the fixed entry stop),
+// Nova's fixed stop/target (it has no trailing mechanism at all). Reminder:
+// bumping this version is what actually makes a shell-file change visible
+// to an already-open browser -- the SW only detects an update by byte-
+// diffing sw.js itself. Bump it EVERY time, not just when convenient.
+const SHELL_CACHE = 'shell-v11';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

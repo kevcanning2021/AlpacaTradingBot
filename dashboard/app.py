@@ -101,6 +101,38 @@ async def account_summary(request):
     })
 
 
+def _load_peak_prices(account_id):
+    """{symbol: peak_price} for accounts with a trailing-stop mechanism
+    (Main/Sofi only -- see config.PEAK_PRICES_PATHS; Nova has none). Updated
+    once per that bot's own check cycle (hourly for stocks), not live-
+    real-time -- can lag slightly behind the current_price shown alongside
+    it. Missing/empty is normal, not an error: a position with no tracked
+    peak yet just hasn't had a check-positions cycle run since it opened."""
+    path = config.PEAK_PRICES_PATHS.get(account_id)
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _load_nova_open_trade_stops():
+    """{symbol: {stop_price, target_price}} from Nova's own sqlite journal --
+    fixed at entry, never trails (Nova has no peak-tracking/trailing-stop
+    mechanism at all, unlike Main/Sofi)."""
+    import sqlite3
+    try:
+        with sqlite3.connect(config.NOVA_JOURNAL_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT symbol, stop_price, target_price FROM trades WHERE outcome = 'open'").fetchall()
+            return {r['symbol']: {'stop_price': r['stop_price'], 'target_price': r['target_price']} for r in rows}
+    except (sqlite3.Error, OSError) as e:
+        logger.error(f"[dashboard] Failed to read Nova's journal for open-trade stops: {e}")
+        return {}
+
+
 async def account_positions(request):
     account_id = request.path_params['account_id']
     client = _account_or_404(account_id)
@@ -111,15 +143,44 @@ async def account_positions(request):
     except Exception as e:
         logger.error(f"[dashboard] Failed to fetch positions for {account_id}: {e}")
         return JSONResponse({'error': 'upstream fetch failed'}, status_code=502)
-    return JSONResponse([{
-        'symbol': p.get('symbol'),
-        'qty': p.get('qty'),
-        'avg_entry_price': p.get('avg_entry_price'),
-        'current_price': p.get('current_price'),
-        'market_value': p.get('market_value'),
-        'unrealized_pl': p.get('unrealized_pl'),
-        'unrealized_plpc': p.get('unrealized_plpc'),
-    } for p in data])
+
+    peak_prices = _load_peak_prices(account_id)
+    nova_stops = _load_nova_open_trade_stops() if account_id == 'trading2' else {}
+
+    positions = []
+    for p in data:
+        symbol = p.get('symbol')
+        entry = {
+            'symbol': symbol,
+            'qty': p.get('qty'),
+            'avg_entry_price': p.get('avg_entry_price'),
+            'current_price': p.get('current_price'),
+            'market_value': p.get('market_value'),
+            'unrealized_pl': p.get('unrealized_pl'),
+            'unrealized_plpc': p.get('unrealized_plpc'),
+        }
+        if symbol in peak_prices:
+            # Main/Sofi: a peak-relative trailing stop that ratchets up as the
+            # peak rises, alongside the fixed entry-anchored stop it can end up
+            # tighter (higher) than -- see trader.py: _handle_trailing_stop /
+            # _handle_stop_loss for the real enforcement this mirrors.
+            try:
+                avg_entry = float(p.get('avg_entry_price') or 0)
+                peak = float(peak_prices[symbol])
+                is_crypto = p.get('asset_class') == 'crypto'
+                stop_pct = config.CRYPTO_STOP_LOSS_THRESHOLD if is_crypto else config.STOP_LOSS_THRESHOLD
+                trail_pct = config.CRYPTO_TRAILING_STOP_THRESHOLD if is_crypto else config.TRAILING_STOP_THRESHOLD
+                entry['peak_price'] = peak
+                entry['entry_stop_price'] = avg_entry * (1 - stop_pct) if avg_entry > 0 else None
+                entry['trailing_stop_price'] = peak * (1 - trail_pct) if peak > 0 else None
+            except (TypeError, ValueError):
+                pass
+        elif symbol in nova_stops:
+            # Nova: fixed at entry, never trails -- shown as-is, no peak.
+            entry['stop_price'] = nova_stops[symbol]['stop_price']
+            entry['target_price'] = nova_stops[symbol]['target_price']
+        positions.append(entry)
+    return JSONResponse(positions)
 
 
 async def account_orders(request):
