@@ -736,6 +736,12 @@ class TradingManager:
         try:
             all_positions = self.client.get_positions()
             account = self.client.get_account()
+            # Fetched alongside positions/account, same failure handling -- without
+            # this, a buy order still 'accepted'/'pending_new' from a prior scan
+            # (halted symbol, processing delay) isn't visible in get_positions() yet,
+            # so the next scan (up to CHECK_INTERVAL_MINUTES later) sees the same
+            # signal and places a second buy for the same symbol.
+            open_orders = self.client.get_orders(status='open')
         except Exception as e:
             return {'timestamp': _now(), 'error': str(e), 'signals': [], 'executed': [], 'errors': [str(e)]}
 
@@ -747,6 +753,7 @@ class TradingManager:
         positions = [p for p in all_positions if p.get('asset_class') == asset_class]
 
         current_symbols = {p['symbol'] for p in positions}
+        pending_order_symbols = {position_symbol(o['symbol']) for o in open_orders}
         held_methods = {s: self.position_methods[s] for s in current_symbols if s in self.position_methods}
 
         scanner = OpportunityScanner(self.client)
@@ -768,6 +775,9 @@ class TradingManager:
                     continue
                 if pos_symbol in current_symbols:
                     continue
+                if pos_symbol in pending_order_symbols:
+                    logger.info(f"[SCANNER] Skipping {symbol} buy — an order for it is already open/pending")
+                    continue
                 pending_buys = sum(1 for e in executed if e['side'] == 'buy')
                 if len(positions) + pending_buys >= max_positions:
                     logger.info(f"[SCANNER] Skipping {symbol} buy — max positions ({max_positions}) reached")
@@ -777,7 +787,16 @@ class TradingManager:
                     continue
 
                 if settings.RESEARCH_AGENT_VETO_ENABLED:
-                    decision = research_propose(sig, client=self.client)
+                    # Own try/except so a failure here (record_decision() hitting
+                    # something other than the OSError it already catches internally)
+                    # can't abort scan_and_execute() for every symbol still left in the
+                    # loop -- same fail-open contract research_propose() already
+                    # documents, now also guaranteed at the call site.
+                    try:
+                        decision = research_propose(sig, client=self.client)
+                    except Exception as e:
+                        logger.error(f"[SCANNER] Research agent call failed for {symbol}, allowing the buy (fail open): {e}")
+                        decision = {'veto': False}
                     if decision.get('veto'):
                         logger.info(f"[SCANNER] Research agent vetoed {symbol} buy — {decision.get('reasoning')}")
                         continue

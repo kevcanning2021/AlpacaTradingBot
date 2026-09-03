@@ -152,6 +152,81 @@ class ScanAndExecuteAgentWiringTests(unittest.TestCase):
         mock_propose.assert_not_called()
         client.create_order.assert_not_called()
 
+    def test_pending_order_for_symbol_blocks_a_new_buy(self):
+        """Real bug found in a full fleet review 2026-09-03: a prior buy
+        order still open/pending (halted symbol, processing delay) wasn't
+        checked before placing a new one for the same symbol -- a real
+        double-buy path since get_positions() alone can't see it yet."""
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = [{'id': 'ord-1', 'symbol': 'BTC/USD', 'status': 'accepted'}]
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]):
+            result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        client.get_orders.assert_called_once_with(status='open')
+        client.create_order.assert_not_called()
+        self.assertEqual(result['executed'], [])
+
+    def test_no_pending_orders_allows_the_buy(self):
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        client.create_order.return_value = {'id': 'order-999'}
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]):
+            result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertTrue(client.create_order.called)
+        self.assertEqual(len(result['executed']), 1)
+
+    def test_a_pending_order_for_a_different_symbol_does_not_block_this_one(self):
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = [{'id': 'ord-1', 'symbol': 'ETH/USD', 'status': 'accepted'}]
+        client.create_order.return_value = {'id': 'order-999'}
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]):
+            result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertTrue(client.create_order.called)
+        self.assertEqual(len(result['executed']), 1)
+
+    def test_research_agent_exception_fails_open_and_allows_the_buy(self):
+        """Real bug found in a full fleet review 2026-09-03: research_propose()
+        had no try/except at its call site (unlike _handle_reentry's own
+        call), so any exception there -- not just the failure modes
+        research_agent.py already catches internally -- used to abort
+        scan_and_execute() for every remaining signal that tick."""
+        settings.RESEARCH_AGENT_VETO_ENABLED = True
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.create_order.return_value = {'id': 'order-1'}
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]), \
+             patch('trader.research_propose', side_effect=TypeError('unexpected internal error')):
+            result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertTrue(client.create_order.called)
+        self.assertEqual(len(result['executed']), 1)
+
+    def test_research_agent_exception_on_one_symbol_does_not_abort_the_next_signal(self):
+        settings.RESEARCH_AGENT_VETO_ENABLED = True
+        second_signal = {'symbol': 'ETH/USD', 'signal': 'buy', 'reason': 'Donchian breakout', 'price': 3000.0, 'rsi': 82.0}
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.create_order.return_value = {'id': 'order-1'}
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL, second_signal]), \
+             patch('trader.research_propose', side_effect=[TypeError('boom'), {'veto': False, 'confidence': None, 'reasoning': 'ok', 'risk_flags': [], 'failed': False}]):
+            result = tm.scan_and_execute(watchlist=['BTC/USD', 'ETH/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(client.create_order.call_count, 2)
+        self.assertEqual(len(result['executed']), 2)
+
     def test_sell_signals_never_invoke_the_agent(self):
         """Per the approved plan, the agent only ever reviews buys the
         scanner already found -- it has no role in exits.
