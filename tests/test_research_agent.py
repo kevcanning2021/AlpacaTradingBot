@@ -53,12 +53,16 @@ class ResearchAgentTests(unittest.TestCase):
     def test_broad_multi_company_article_is_ignored(self):
         """Real bug found live 2026-09-02: a keyword match inside an article
         tagged with many symbols (a comparison/roundup piece, not news about
-        this symbol specifically) must not count. Reproduces the exact case
-        that caused it: an 8-symbol article containing 'warns' vetoed an
-        unrelated NVDA entry."""
+        this symbol specifically) must not count. Reproduces the original
+        case that caused it (an 8-symbol article vetoed an unrelated NVDA
+        entry), with 'layoffs' standing in for the 'warns' match that
+        actually triggered it -- 'warns' was removed from the keyword list
+        2026-09-03 after a second, unrelated false-catch, but the multi-
+        symbol filter this test verifies is unrelated to which keyword
+        matched."""
         client = MagicMock()
         client.get_news.return_value = [_article(
-            headline="Gary Black Warns Tesla Risks Falling Behind in the Self-Driving Race",
+            headline="Analyst Note: Sector-Wide Layoffs Loom as Self-Driving Race Heats Up",
             symbols=['AMZN', 'BIDU', 'GOOG', 'GOOGL', 'NVDA', 'SKHY', 'TSLA', 'WRD'],
         )]
         result = research_agent.propose(SIGNAL, client=client)
