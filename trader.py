@@ -19,6 +19,16 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 't
 POSITION_OPENED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_opened_state.json')
 POSITION_METHOD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'position_method_state.json')
 
+# create_order()'s HTTP response only confirms Alpaca ACCEPTED the order, not that
+# it filled -- but a same-response terminal status (immediate rejection, e.g. an
+# obviously invalid order) is knowable right away and is checked at both call
+# sites below before updating reentry_fired/position_methods/buying_power. This
+# doesn't catch a LATER async rejection (accepted now, rejected moments after this
+# response) -- that would need a reconciliation pass against real position/order
+# state on a later cycle, not yet implemented; found in a full fleet review
+# 2026-09-03.
+ORDER_TERMINAL_FAILURE_STATUSES = {'rejected', 'canceled', 'expired'}
+
 
 def _now() -> str:
     """Current time in REPORT_TIMEZONE, ISO format."""
@@ -517,6 +527,15 @@ class TradingManager:
             client_order_id = f"reentry-{symbol}-{int(datetime.now().timestamp())}"
             try:
                 order = self.client.create_order(order_symbol, side='buy', notional=notional, client_order_id=client_order_id)
+                if order.get('status') in ORDER_TERMINAL_FAILURE_STATUSES:
+                    action = {
+                        'action': 'REENTRY_FAILED',
+                        'symbol': symbol,
+                        'recommendation': f"Re-entry order came back {order.get('status')} ({order.get('id')})",
+                    }
+                    logger.error(f"[{symbol}] Re-entry order came back {order.get('status')} — not updating reentry state")
+                    report['actions_taken'].append(action)
+                    return buying_power
                 self.reentry_fired.add(symbol)
                 self._save_reentry_state()
                 buying_power -= notional
@@ -806,6 +825,10 @@ class TradingManager:
                 try:
                     order = self.client.create_order(symbol, side='buy', notional=notional,
                                                        client_order_id=client_order_id)
+                    if order.get('status') in ORDER_TERMINAL_FAILURE_STATUSES:
+                        errors.append(f"Buy {symbol}: order {order.get('status')} ({order.get('id')})")
+                        logger.error(f"[SCANNER] Buy {symbol} came back {order.get('status')} — not updating position state")
+                        continue
                     qty = round(notional / price, 4)
                     buying_power -= notional
                     executed.append({'side': 'buy', 'symbol': symbol, 'qty': qty, 'price': price, 'reason': sig['reason'], 'order_id': order.get('id')})
