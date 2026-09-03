@@ -3,6 +3,8 @@ const POLL_INTERVAL_MS = 15000;
 let currentAccount = null;
 let currentTab = 'account'; // 'account' or 'agents'
 let pollTimer = null;
+let showAllDecisions = false; // default: vetoes only -- most decisions are routine allows, not worth scanning past on mobile
+let lastDecisions = [];
 
 function showLogin(message) {
   document.getElementById('login-screen').classList.remove('hidden');
@@ -168,25 +170,39 @@ function renderInfraIssues(issues) {
 }
 
 function renderResearchAgentDecisions(decisions) {
-  const tbody = document.querySelector('#research-agent-table tbody');
-  tbody.innerHTML = '';
-  decisions.forEach((d) => {
-    const row = document.createElement('tr');
-    row.className = 'expandable';
+  lastDecisions = decisions;
+  renderFilteredDecisions();
+}
+
+function renderFilteredDecisions() {
+  const list = document.getElementById('research-agent-list');
+  const shown = showAllDecisions ? lastDecisions : lastDecisions.filter((d) => d.veto);
+  list.innerHTML = '';
+  shown.forEach((d) => {
+    const item = document.createElement('div');
+    item.className = 'decision-item';
     const vetoBadge = d.veto ? '<span class="badge badge-red">Blocked</span>' : '<span class="badge badge-green">Allowed</span>';
-    const conf = (d.confidence === null || d.confidence === undefined) ? '-' : Math.round(d.confidence * 100) + '%';
+    const conf = (d.confidence === null || d.confidence === undefined) ? '' : `<span>${Math.round(d.confidence * 100)}%</span>`;
     const flags = (d.risk_flags || []).map((f) => `<span class="tag">${f}</span>`).join('');
     const bot = d.bot ? d.bot[0].toUpperCase() + d.bot.slice(1) : '-';
-    row.innerHTML = `<td>${niceTime(d.timestamp)}</td><td>${bot}</td><td>${d.symbol}</td>
-      <td>${vetoBadge}</td><td>${conf}</td><td>${flags}</td>`;
-    const detail = document.createElement('tr');
-    detail.className = 'reasoning-row hidden';
-    detail.innerHTML = `<td colspan="6">${d.reasoning || ''}</td>`;
-    row.addEventListener('click', () => detail.classList.toggle('hidden'));
-    tbody.appendChild(row);
-    tbody.appendChild(detail);
+    item.innerHTML = `
+      <div class="item-top">
+        <span class="item-title">${d.symbol}</span>
+        <span class="item-sub">${bot}</span>
+        ${vetoBadge}
+      </div>
+      <div class="item-meta">
+        <span>${niceTime(d.timestamp)}</span>
+        ${conf}
+        ${flags}
+      </div>
+      <div class="item-detail hidden">${d.reasoning || ''}</div>`;
+    item.addEventListener('click', () => item.querySelector('.item-detail').classList.toggle('hidden'));
+    list.appendChild(item);
   });
-  if (!decisions.length) tbody.innerHTML = '<tr><td colspan="6">No decisions logged yet</td></tr>';
+  if (!shown.length) {
+    list.innerHTML = `<p class="hint">${showAllDecisions ? 'No decisions logged yet' : 'No vetoes yet — nothing blocked so far'}</p>`;
+  }
 }
 
 function renderSummary(s) {
@@ -200,17 +216,26 @@ function renderSummary(s) {
 }
 
 function renderPositions(positions) {
-  const tbody = document.querySelector('#positions-table tbody');
-  tbody.innerHTML = '';
+  const list = document.getElementById('positions-list');
+  list.innerHTML = '';
   positions.forEach((p) => {
     const pnl = parseFloat(p.unrealized_pl);
     const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
-    const row = document.createElement('tr');
-    row.innerHTML = `<td>${p.symbol}</td><td>${p.qty}</td><td>${money(p.avg_entry_price)}</td>
-      <td>${money(p.current_price)}</td><td class="${pnlClass}">${money(p.unrealized_pl)}</td>`;
-    tbody.appendChild(row);
+    const item = document.createElement('div');
+    item.className = 'decision-item';
+    item.innerHTML = `
+      <div class="item-top">
+        <span class="item-title">${p.symbol}</span>
+        <span class="item-sub">${p.qty} sh</span>
+        <span class="${pnlClass}">${money(p.unrealized_pl)}</span>
+      </div>
+      <div class="item-meta">
+        <span>Bought ${money(p.avg_entry_price)}</span>
+        <span>Now ${money(p.current_price)}</span>
+      </div>`;
+    list.appendChild(item);
   });
-  if (!positions.length) tbody.innerHTML = '<tr><td colspan="5">No open positions</td></tr>';
+  if (!positions.length) list.innerHTML = '<p class="hint">No open positions</p>';
 }
 
 function niceTime(iso) {
@@ -218,15 +243,24 @@ function niceTime(iso) {
 }
 
 function renderOrders(orders) {
-  const tbody = document.querySelector('#orders-table tbody');
-  tbody.innerHTML = '';
+  const list = document.getElementById('orders-list');
+  list.innerHTML = '';
   orders.forEach((o) => {
-    const row = document.createElement('tr');
-    row.innerHTML = `<td>${o.symbol}</td><td>${o.side}</td><td>${o.status}</td>
-      <td>${o.filled_avg_price ? money(o.filled_avg_price) : '-'}</td><td>${niceTime(o.submitted_at)}</td>`;
-    tbody.appendChild(row);
+    const item = document.createElement('div');
+    item.className = 'decision-item';
+    item.innerHTML = `
+      <div class="item-top">
+        <span class="item-title">${o.symbol}</span>
+        <span class="item-sub">${o.side}</span>
+        <span class="tag">${o.status}</span>
+      </div>
+      <div class="item-meta">
+        <span>${o.filled_avg_price ? money(o.filled_avg_price) : 'not filled'}</span>
+        <span>${niceTime(o.submitted_at)}</span>
+      </div>`;
+    list.appendChild(item);
   });
-  if (!orders.length) tbody.innerHTML = '<tr><td colspan="5">No orders yet</td></tr>';
+  if (!orders.length) list.innerHTML = '<p class="hint">No orders yet</p>';
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -258,6 +292,12 @@ document.getElementById('research-agent-toggle').addEventListener('click', (e) =
   const body = document.getElementById('research-agent-body');
   const nowHidden = body.classList.toggle('hidden');
   e.target.textContent = 'Research Agent Decisions ' + (nowHidden ? '▸' : '▾');
+});
+
+document.getElementById('research-agent-filter-toggle').addEventListener('click', (e) => {
+  showAllDecisions = !showAllDecisions;
+  e.target.textContent = showAllDecisions ? 'Vetoes only' : 'Show all';
+  renderFilteredDecisions();
 });
 
 (async function init() {

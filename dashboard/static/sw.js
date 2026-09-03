@@ -1,10 +1,11 @@
-// Bumped v7 -> v8: index.html/style.css/app.js changed again -- hover-based
-// tooltips don't work on mobile (no hover state on a touchscreen), so issue
-// text is back to always-visible, just scoped per-bot instead of one shared
-// panel. Reminder: bumping this version is what actually makes a shell-file
-// change visible to an already-open browser -- the SW only detects an update
-// by byte-diffing sw.js itself. Bump it EVERY time, not just when convenient.
-const SHELL_CACHE = 'shell-v8';
+// Bumped v8 -> v9: index.html/style.css/app.js changed again -- research
+// decisions/positions/orders switched from cramped multi-column <table>s
+// (no good mobile answer) to a stacked card-list layout, and the research
+// log now defaults to vetoes-only with a toggle to show everything.
+// Reminder: bumping this version is what actually makes a shell-file change
+// visible to an already-open browser -- the SW only detects an update by
+// byte-diffing sw.js itself. Bump it EVERY time, not just when convenient.
+const SHELL_CACHE = 'shell-v9';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

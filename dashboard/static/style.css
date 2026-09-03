@@ -48,8 +48,6 @@ header { display: flex; justify-content: space-between; align-items: center; mar
 .summary-grid .label { display: block; font-size: 0.8rem; color: #888; }
 .summary-grid .value { display: block; font-size: 1.1rem; font-weight: 600; }
 
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #2a2d35; }
 .positive { color: #4ade80; }
 .negative { color: #f87171; }
 
@@ -93,8 +91,27 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #2a2d35; }
   padding: 2px 6px; border-radius: 6px; margin: 1px 3px 1px 0;
 }
 
-tr.expandable { cursor: pointer; }
-tr.expandable:hover { background: #20232b; }
-tr.reasoning-row td {
-  font-size: 0.8rem; color: #aaa; background: #14161b; white-space: normal;
+.filter-toggle {
+  font-size: 0.75rem; padding: 5px 12px; border-radius: 12px; border: 1px solid #333;
+  background: #14161b; color: #aaa; cursor: pointer; margin-bottom: 10px;
+}
+.filter-toggle:active { background: #20232b; }
+
+/* Card-list layout replaces plain <table>s throughout -- a 5-6 column table has
+   no good mobile answer (squish everything unreadable, or force horizontal
+   scroll); a stacked card reads fine at any width instead. */
+.decision-list { display: flex; flex-direction: column; gap: 8px; }
+.decision-item {
+  background: #14161b; border-radius: 8px; padding: 10px 12px; cursor: pointer;
+}
+.item-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.item-title { font-weight: 600; }
+.item-sub { font-size: 0.8rem; color: #888; }
+.item-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 6px; font-size: 0.78rem; color: #888;
+}
+.item-detail {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2d35;
+  font-size: 0.8rem; color: #aaa; white-space: pre-wrap;
 }
