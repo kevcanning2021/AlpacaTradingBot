@@ -65,6 +65,25 @@ class ResearchAgentTests(unittest.TestCase):
         self.assertFalse(result['veto'])
         self.assertEqual(result['risk_flags'], [])
 
+    def test_keyword_inside_a_longer_word_does_not_match(self):
+        """Real bug found live 2026-09-03: 'sues' is a substring of 'issues',
+        so a plain `in` check vetoed completely benign headlines like this
+        one. Now word-boundary matched -- 'issues' must not trigger 'sues'."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(headline='Apple issues strong holiday guidance')]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_keyword_as_a_real_standalone_word_still_matches(self):
+        """Word-boundary matching must not become so strict it stops matching
+        the real word -- 'sues' as an actual standalone word must still veto."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(headline='Regulator sues company over disclosure failures')]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertTrue(result['veto'])
+        self.assertIn('sues', result['risk_flags'])
+
     def test_focused_article_at_the_threshold_still_counts(self):
         """MAX_ARTICLE_SYMBOLS is a boundary, not an off-by-one trap -- an
         article tagged with exactly the limit still counts as focused."""
