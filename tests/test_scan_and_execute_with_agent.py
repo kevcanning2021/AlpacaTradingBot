@@ -227,6 +227,36 @@ class ScanAndExecuteAgentWiringTests(unittest.TestCase):
         self.assertEqual(client.create_order.call_count, 2)
         self.assertEqual(len(result['executed']), 2)
 
+    def test_order_that_comes_back_rejected_is_not_recorded_as_executed(self):
+        """Real bug found in a full fleet review 2026-09-03: create_order()'s
+        200/201 HTTP status only confirms Alpaca ACCEPTED the request, not
+        that the order will fill -- but a same-response terminal status
+        (immediate rejection) is knowable right away and must not be treated
+        as a successful buy."""
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        client.create_order.return_value = {'id': 'order-1', 'status': 'rejected'}
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]):
+            result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(result['executed'], [])
+        self.assertTrue(any('rejected' in e for e in result['errors']))
+
+    def test_order_that_comes_back_accepted_is_recorded_as_before(self):
+        settings.RESEARCH_AGENT_VETO_ENABLED = False
+        client = MagicMock()
+        client.get_positions.return_value = []
+        client.get_account.return_value = {'buying_power': '100000'}
+        client.get_orders.return_value = []
+        client.create_order.return_value = {'id': 'order-1', 'status': 'accepted'}
+        tm = make_manager(client)
+        with patch.object(trader.OpportunityScanner, 'scan', return_value=[BUY_SIGNAL]):
+            result = tm.scan_and_execute(watchlist=['BTC/USD'], position_size_usd=500, max_positions=2)
+        self.assertEqual(len(result['executed']), 1)
+
     def test_sell_signals_never_invoke_the_agent(self):
         """Per the approved plan, the agent only ever reviews buys the
         scanner already found -- it has no role in exits.
