@@ -8,6 +8,7 @@ reentry_state.json
 position_opened_state.json
 strategy_check_state.json
 trade_history.json
+session_revocation_state.json
 scratch_crypto_backtest/
 venv/
 *.bak-*

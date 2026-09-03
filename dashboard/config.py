@@ -23,7 +23,7 @@ ALPACA_TRADING2_SECRET_KEY = os.getenv('ALPACA_TRADING2_SECRET_KEY', '')
 # each decision came from.
 RESEARCH_AGENT_DECISIONS_PATHS = {
     'main': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_MAIN', '/opt/alpaca-bot/agent_decisions_state.json'),
-    'sofi': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_SOFI', '/opt/pdt15rev-bot/agent_decisions_state.json'),
+    'sofi': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_SOFI', '/opt/sofi-bot/agent_decisions_state.json'),
     'nova': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_NOVA', '/opt/trading-2-0/data/research_decisions.json'),
 }
 

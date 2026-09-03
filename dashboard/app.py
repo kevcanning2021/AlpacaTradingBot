@@ -60,6 +60,7 @@ async def login(request):
 
 
 async def logout(request):
+    auth.revoke_all_sessions()
     response = JSONResponse({'ok': True})
     response.delete_cookie('session')
     return response
@@ -82,7 +83,7 @@ async def account_summary(request):
     if client is None:
         return JSONResponse({'error': 'unknown account'}, status_code=404)
     try:
-        data = get_or_fetch(account_id, 'summary', SUMMARY_TTL, client.get_account)
+        data = await get_or_fetch(account_id, 'summary', SUMMARY_TTL, client.get_account)
     except Exception as e:
         # The real message (not just a generic "upstream fetch failed") matters here --
         # this is the same signal that caught Production's dead API key by hand earlier
@@ -106,7 +107,7 @@ async def account_positions(request):
     if client is None:
         return JSONResponse({'error': 'unknown account'}, status_code=404)
     try:
-        data = get_or_fetch(account_id, 'positions', POSITIONS_TTL, client.get_positions)
+        data = await get_or_fetch(account_id, 'positions', POSITIONS_TTL, client.get_positions)
     except Exception as e:
         logger.error(f"[dashboard] Failed to fetch positions for {account_id}: {e}")
         return JSONResponse({'error': 'upstream fetch failed'}, status_code=502)
@@ -127,7 +128,7 @@ async def account_orders(request):
     if client is None:
         return JSONResponse({'error': 'unknown account'}, status_code=404)
     try:
-        data = get_or_fetch(account_id, 'orders', ORDERS_TTL, client.get_orders)
+        data = await get_or_fetch(account_id, 'orders', ORDERS_TTL, client.get_orders)
     except Exception as e:
         logger.error(f"[dashboard] Failed to fetch orders for {account_id}: {e}")
         return JSONResponse({'error': 'upstream fetch failed'}, status_code=502)
@@ -145,7 +146,7 @@ async def account_orders(request):
     } for o in data])
 
 
-def _account_health(account_id: str):
+async def _account_health(account_id: str):
     """True/error-message for one Alpaca-backed agent -- reuses the same
     cached get_account() fetch account_summary() already makes (same TTL,
     same cache key) so this costs no extra API call when both are hit in
@@ -154,7 +155,7 @@ def _account_health(account_id: str):
     if client is None:
         return {'healthy': False, 'detail': 'no account configured'}
     try:
-        get_or_fetch(account_id, 'summary', SUMMARY_TTL, client.get_account)
+        await get_or_fetch(account_id, 'summary', SUMMARY_TTL, client.get_account)
         return {'healthy': True, 'detail': None}
     except Exception as e:
         return {'healthy': False, 'detail': str(e)}
@@ -204,14 +205,15 @@ def _research_agent_health():
 
 
 async def agents_overview(request):
-    def _health_for(agent):
+    async def _health_for(agent):
         if not agent['monitored']:
             return {'healthy': None, 'detail': 'not yet monitored'}
         if agent['id'] == 'research_agent':
-            return get_or_fetch('research_agent', 'health', AGENTS_OVERVIEW_TTL, _research_agent_health)
-        return get_or_fetch(agent['id'], 'health', AGENTS_OVERVIEW_TTL, lambda: _account_health(agent['id']))
+            return await get_or_fetch('research_agent', 'health', AGENTS_OVERVIEW_TTL, _research_agent_health)
+        return await get_or_fetch(agent['id'], 'health', AGENTS_OVERVIEW_TTL, lambda: _account_health(agent['id']))
 
-    return JSONResponse([dict(agent, health=_health_for(agent)) for agent in AGENTS_OVERVIEW])
+    results = [dict(agent, health=await _health_for(agent)) for agent in AGENTS_OVERVIEW]
+    return JSONResponse(results)
 
 
 async def research_agent_decisions(request):
@@ -219,7 +221,7 @@ async def research_agent_decisions(request):
         return _load_research_decisions()[:RESEARCH_AGENT_DECISIONS_LIMIT]
 
     try:
-        data = get_or_fetch('research_agent', 'decisions', RESEARCH_AGENT_DECISIONS_TTL, _load)
+        data = await get_or_fetch('research_agent', 'decisions', RESEARCH_AGENT_DECISIONS_TTL, _load)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"[dashboard] Failed to read research agent decisions: {e}")
         return JSONResponse({'error': str(e)}, status_code=502)
@@ -265,7 +267,7 @@ async def issues(request):
         return flat
 
     try:
-        data = get_or_fetch('issues', 'issues', ISSUES_TTL, _load)
+        data = await get_or_fetch('issues', 'issues', ISSUES_TTL, _load)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"[dashboard] Failed to read issue state: {e}")
         return JSONResponse({'error': str(e)}, status_code=502)
