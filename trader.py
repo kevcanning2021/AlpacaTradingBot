@@ -775,6 +775,28 @@ class TradingManager:
         pending_order_symbols = {position_symbol(o['symbol']) for o in open_orders}
         held_methods = {s: self.position_methods[s] for s in current_symbols if s in self.position_methods}
 
+        # Self-heals reentry_fired/position_methods for a symbol whose earlier buy
+        # attempt returned success but never actually resulted in a position or a
+        # still-open order -- e.g. an order accepted then rejected asynchronously,
+        # moments after create_order()'s response returned (ORDER_TERMINAL_FAILURE_
+        # STATUSES above only catches a same-response rejection). Bounds how long
+        # that stale state can survive to at most one scan cycle instead of
+        # indefinitely -- found in a full fleet review 2026-09-03, alongside the
+        # immediate-rejection check. Scoped to this watchlist only: reentry_fired/
+        # position_methods aren't asset-class-segregated, but current_symbols/
+        # pending_order_symbols here only cover THIS call's asset class, so
+        # reconciling a symbol outside this watchlist would incorrectly treat an
+        # out-of-scope symbol's real state as stale.
+        watchlist_pos_symbols = {position_symbol(s) for s in watchlist}
+        for stale in (watchlist_pos_symbols & self.reentry_fired) - current_symbols - pending_order_symbols:
+            self.reentry_fired.discard(stale)
+            self._save_reentry_state()
+            logger.info(f"[SCANNER] Cleared stale reentry_fired for {stale} — no open position or order found")
+        for stale in (watchlist_pos_symbols & set(self.position_methods)) - current_symbols - pending_order_symbols:
+            self.position_methods.pop(stale, None)
+            self._save_position_methods()
+            logger.info(f"[SCANNER] Cleared stale position_methods entry for {stale} — no open position or order found")
+
         scanner = OpportunityScanner(self.client)
         signals = scanner.scan(watchlist, held_methods=held_methods)
 
