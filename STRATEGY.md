@@ -9,11 +9,35 @@ and every rejected idea is recorded so it doesn't get re-tried blind.
 
 ## What the bot actually does (current, live)
 
-**Entry**: `scanner.py: OpportunityScanner._analyze` — buy when EMA9
+**Entry (crypto, and stocks when `DUAL_SIGNAL_BOLLINGER_ENABLED=false`)**:
+`scanner.py: OpportunityScanner._analyze_ema_crossover` — buy when EMA9
 crosses above EMA21 **and** RSI(14) < `BUY_RSI_MAX`.
 
+**Entry (stocks, `DUAL_SIGNAL_BOLLINGER_ENABLED=true` — the live default
+since 2026-09-03)**: `_analyze_bars` checks both signal sources for each
+unheld symbol, Bollinger first, EMA second, first-fire-wins:
+`_analyze_bollinger` (lower-band bounce: price closes below the 20-period,
+2-std Bollinger lower band **and** RSI(14) < `BOLLINGER_OVERSOLD_RSI`) or
+the EMA crossover above. Crypto always uses EMA only, flag or no flag —
+untested/rejected for crypto on Main's backtest (-34% to -51% over 9mo on
+BTC/ETH), so deliberately not wired in here either. A held position is
+only re-evaluated by whichever method originally opened it, tracked
+per-symbol in `position_method_state.json` (`trader.py`, same
+load/save/pop-on-close pattern as `peak_prices`/`reentry_fired`). Ported
+to Main first (see Main's `STRATEGY.md` for the full backtest evidence);
+Sofi runs byte-identical code with the flag on, but as of 2026-09-04
+hasn't had a qualifying setup fire yet — see "Path to real money" below.
+
 **Exit**: sell when EMA9 crosses below EMA21, **or** RSI(14) >
-`SELL_RSI_MIN`, regardless of crossover state.
+`SELL_RSI_MIN`, regardless of crossover state. Applies the same way
+regardless of which method opened the position.
+
+**Research Agent veto**: every signal from either source, before it's
+ever submitted as an order, passes through `agents/research_agent.py`'s
+free news-based check (`RESEARCH_AGENT_VETO_ENABLED`, `trader.py:
+scan_and_execute`) — same `for sig in signals:` loop and veto check for
+both methods, so a Bollinger-sourced buy is vetted exactly like an
+EMA-sourced one. Fails open (a failed agent call never blocks a trade).
 
 RSI is a simple/Cutler's-style 14-period average of gains/losses
 (`scanner.py: _compute_rsi`), not Wilder-smoothed. This is intentional —
@@ -51,6 +75,9 @@ touch each other's positions.
 | `BUY_RSI_MAX` | 65 / 65 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
 | `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
 | `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest |
+| `BOLLINGER_PERIOD` | 20 (stock only) | `scanner.py` | see Main's `STRATEGY.md` dual-signal note |
+| `BOLLINGER_STD` | 2 (stock only) | `scanner.py` | see Main's `STRATEGY.md` dual-signal note |
+| `BOLLINGER_OVERSOLD_RSI` | 40 (stock only) | `scanner.py` | see Main's `STRATEGY.md` dual-signal note |
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
 | Re-entry | 5% / 12.5% | `config/settings.py` | 2026-07-14 |
@@ -343,14 +370,24 @@ milestones:
 
 1. **10 closed stock trades**, with `strategy_check.py`'s own forward-test
    comparison (`trade_history.json` vs. a fresh backtest) showing live
-   results tracking the backtest, not diverging. As of 2026-08-13: **3**
-   (NVDA -5.19% stop-loss 07-17, MSFT +23.9% scanner RSI exit 08-04, GOOGL
-   -5.47% stop-loss 08-11 — all three confirmed via VPS logs to be exactly
-   the mechanism they appear to be, not a surprise).
-2. **1 closed crypto trade.** As of 2026-08-13: **0** — BTC/USD and
-   ETH/USD's RSI simply hasn't dropped below `BUY_RSI_MAX` since the
-   account opened, confirmed via VPS journalctl to be a live, correctly-
-   running job with no qualifying signal, not a stalled scheduler.
+   results tracking the backtest, not diverging. As of 2026-09-04: **0** —
+   corrected here; the NVDA/MSFT/GOOGL trades this section previously
+   cited were inherited verbatim from Main's copy of this doc when Sofi
+   was forked and were never Sofi's own trades (Sofi's paper account was
+   created 2026-08-20, after all three). Sofi has no `trade_history.json`
+   at all — not a missing-file bug, just genuinely zero closes since
+   inception (15 days as of this update). Root cause: same structurally
+   overbought-market drought Main hit before its 2026-09-03 dual-signal
+   Bollinger fix — Sofi runs the identical scanner code with
+   `DUAL_SIGNAL_BOLLINGER_ENABLED=true` already deployed, confirmed live
+   (WMT RSI 29.8, oversold-qualifying but price hasn't closed below the
+   lower Bollinger band yet), so it's primed and waiting on a real setup,
+   not broken.
+2. **1 closed crypto trade.** As of 2026-09-04: **0** — same as above,
+   BTC/USD and ETH/USD's RSI hasn't dropped below `BUY_RSI_MAX` since the
+   account opened, confirmed via VPS journalctl to be a live,
+   correctly-running job with no qualifying signal, not a stalled
+   scheduler.
 3. **The `MIN_REENTRY_AGE_HOURS` gate observed firing correctly on a real
    pullback dated after 2026-08-06** (either a real re-entry buy, or a
    `REENTRY_SKIPPED` for a too-young position). Not yet observed — see the
@@ -410,9 +447,18 @@ milestone 1's forward-test comparison is built to catch).
   rather than volatility, so wouldn't share the same failure mode, but
   needs a stable win-rate estimate this account's ~31-trade backtest
   sample may be too thin to trust) and different indicators entirely
-  (MACD, Bollinger Bands) rather than filters layered on the existing
-  EMA9/21+RSI core. Both are real time investments, not quick follow-ups
-  — not started.
+  (MACD) rather than filters layered on the existing EMA9/21+RSI core —
+  real time investment, not a quick follow-up, not started. Bollinger
+  Bands (the other indicator this item used to list) is no longer
+  untried — shipped on Main 2026-09-03 as a dual-signal addition
+  alongside EMA, not a replacement, and Sofi runs the same code/flag; see
+  the dual-signal note above and Main's `STRATEGY.md` for the full
+  backtest evidence.
+- **Drought fallback** (a Bollinger variant that widens/relaxes further
+  during an extended no-signal drought) exists on the sibling branch the
+  dual-signal port came from, but wasn't ported alongside it on Main or
+  here — see Main's `STRATEGY.md` Open Items for why (thin n=1
+  validation, deferred until dual-signal has real live results).
 
 ## How to backtest a change
 
