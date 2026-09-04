@@ -9,11 +9,34 @@ and every rejected idea is recorded so it doesn't get re-tried blind.
 
 ## What the bot actually does (current, live)
 
-**Entry**: `scanner.py: OpportunityScanner._analyze` — buy when EMA9
+**Entry (crypto, and stocks when `DUAL_SIGNAL_BOLLINGER_ENABLED=false`)**:
+`scanner.py: OpportunityScanner._analyze_ema_crossover` — buy when EMA9
 crosses above EMA21 **and** RSI(14) < `BUY_RSI_MAX`.
 
+**Entry (stocks, `DUAL_SIGNAL_BOLLINGER_ENABLED=true` — the live default
+since 2026-09-03)**: `_analyze_bars` checks both signal sources for each
+unheld symbol, Bollinger first, EMA second, first-fire-wins:
+`_analyze_bollinger` (lower-band bounce: price closes below the 20-period,
+2-std Bollinger lower band **and** RSI(14) < `BOLLINGER_OVERSOLD_RSI`) or
+the EMA crossover above. Crypto always uses EMA only, flag or no flag — a
+Bollinger variant was backtested for crypto and was badly negative (-34%
+to -51% over 9mo on BTC/ETH), so it's deliberately not wired in there. A
+held position is only re-evaluated by whichever method originally opened
+it, tracked per-symbol in `position_method_state.json` (`trader.py`, same
+load/save/pop-on-close pattern as `peak_prices`/`reentry_fired`).
+
 **Exit**: sell when EMA9 crosses below EMA21, **or** RSI(14) >
-`SELL_RSI_MIN`, regardless of crossover state.
+`SELL_RSI_MIN`, regardless of crossover state. Applies the same way
+regardless of which method opened the position — Bollinger has no
+separate exit signal of its own.
+
+**Research Agent veto**: every signal from either source, before it's
+ever submitted as an order, passes through `agents/research_agent.py`'s
+free news-based check (`RESEARCH_AGENT_VETO_ENABLED`, `trader.py:
+scan_and_execute`) — a same `for sig in signals:` loop and veto check for
+both methods, so a Bollinger-sourced buy is vetted exactly like an
+EMA-sourced one, no separate call site to miss. Fails open (a failed
+agent call never blocks a trade) and is logged either way, e.g. `[research_agent] IWM: veto=False (5 articles checked)`.
 
 RSI is a simple/Cutler's-style 14-period average of gains/losses
 (`scanner.py: _compute_rsi`), not Wilder-smoothed. This is intentional —
@@ -51,6 +74,9 @@ touch each other's positions.
 | `BUY_RSI_MAX` | 65 / 65 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
 | `SELL_RSI_MIN` | 80 / 80 | `scanner.py` | 2026-07-16 (stock), 2026-07-17 (crypto, not contradicted) |
 | `SIGNAL_BAR_WINDOW` | 90 / 90 | `scanner.py` | 2026-07-16 backtest |
+| `BOLLINGER_PERIOD` | 20 (stock only) | `scanner.py` | see dual-signal note below |
+| `BOLLINGER_STD` | 2 (stock only) | `scanner.py` | see dual-signal note below |
+| `BOLLINGER_OVERSOLD_RSI` | 40 (stock only) | `scanner.py` | see dual-signal note below |
 | Stop-loss | 5% / 15% | `config/settings.py` | 2026-07-13 (crypto) |
 | Trailing stop | 8% / 20% | `config/settings.py` | 2026-07-13 (crypto) |
 | Re-entry | 5% / 12.5% | `config/settings.py` | 2026-07-14 |
@@ -281,6 +307,36 @@ watchlist ever changes (a future screen might land on symbols where this
 correlation doesn't hold), not a permanently-closed question the way the
 07-16/07-23 watchlist-widening attempts are.
 
+**Dual-signal entry: Bollinger + EMA, stocks only (live 2026-09-03).**
+Main went 2 full trading days (19 symbols, zero BUY signals) because
+EMA9/21+RSI<70 (a local, unbacktested loosening of `BUY_RSI_MAX`) can't
+structurally fire while the market stays broadly overbought — further
+loosening the same gate was tried before and gutted expectancy, so wasn't
+the fix. A sibling branch (`origin/master`, built for a now-retired bot,
+never adopted here) already had a validated answer for exactly this: an
+independent Bollinger mean-reversion signal that fires under the opposite
+condition (oversold, not overbought). Real backtest, 22 months/460 daily
+bars, walk-forward with realistic sizing/stops/reentry: Bollinger alone —
+44 trades, 70.5% win, +1.66%/trade, +16.67% total, positive train and
+holdout, leave-one-symbol-out always positive. **Dual (both sources
+together) — 90 trades (~2x the frequency), +1.71%/trade (higher than
+either alone), +35.89% total**, positive on train (+18.25%) and holdout
+(+15.70%). A prior attempt to fix low frequency by loosening Bollinger's
+own thresholds was tried and rejected — every looser variant traded more
+with worse/negative expectancy; dual-sourcing, not loosening, is what
+validated. Ported as an additive second signal, not a replacement.
+`BUY_RSI_MAX` was reverted 70→65 alongside this — the dual-signal backtest
+above was run at 65, so shipping the EMA leg as something actually tested
+rather than stacking an unvalidated threshold on top of a validated
+strategy change. **Real caveat: never forward-tested live before this** —
+backtest-only until the flag went on. First live result: IWM bought
+2026-09-03 13:57 via the Bollinger path (RSI 34.9, lower-band bounce),
+veto=False, tracked in `position_method_state.json` as `bollinger`. One
+trade proves nothing about the 70.5%/+1.66% edge by itself — revisit
+alongside milestone 1 below once more accumulate. Sofi runs the identical
+code/flag; Nova doesn't share this codebase (different multi-timeframe
+strategy) and wasn't touched.
+
 ## Automated monitoring: `strategy_check.py`
 
 A VPS cron job (hourly, test account only, `/opt/alpaca-bot-test`), added
@@ -410,9 +466,20 @@ milestone 1's forward-test comparison is built to catch).
   rather than volatility, so wouldn't share the same failure mode, but
   needs a stable win-rate estimate this account's ~31-trade backtest
   sample may be too thin to trust) and different indicators entirely
-  (MACD, Bollinger Bands) rather than filters layered on the existing
-  EMA9/21+RSI core. Both are real time investments, not quick follow-ups
-  — not started.
+  (MACD) rather than filters layered on the existing EMA9/21+RSI core —
+  real time investment, not a quick follow-up, not started. Bollinger
+  Bands (the other indicator this item used to list) is no longer
+  untried — shipped 2026-09-03 as a dual-signal addition alongside EMA,
+  not a replacement; see the dual-signal note above.
+- **Drought fallback** (a Bollinger variant that widens/relaxes further
+  during an extended no-signal drought) exists on the same sibling branch
+  the dual-signal port came from, but wasn't ported alongside it — its own
+  backtest note admits only a single occurrence (n=1) of validation, and
+  stacking a second, weakly-validated behavior on top of the
+  already-first-ever-live-test of dual-signal Bollinger would make any
+  early live anomaly impossible to attribute cleanly. Cheap to add later
+  as its own separately-flagged follow-up once dual-signal has real live
+  results.
 
 ## How to backtest a change
 
