@@ -399,14 +399,19 @@ milestones:
 
 1. **10 closed stock trades**, with `strategy_check.py`'s own forward-test
    comparison (`trade_history.json` vs. a fresh backtest) showing live
-   results tracking the backtest, not diverging. As of 2026-08-13: **3**
-   (NVDA -5.19% stop-loss 07-17, MSFT +23.9% scanner RSI exit 08-04, GOOGL
-   -5.47% stop-loss 08-11 — all three confirmed via VPS logs to be exactly
-   the mechanism they appear to be, not a surprise).
-2. **1 closed crypto trade.** As of 2026-08-13: **0** — BTC/USD and
-   ETH/USD's RSI simply hasn't dropped below `BUY_RSI_MAX` since the
-   account opened, confirmed via VPS journalctl to be a live, correctly-
-   running job with no qualifying signal, not a stalled scheduler.
+   results tracking the backtest, not diverging. As of 2026-09-04: **3 in
+   `trade_history.json`** (MSFT +24.5% scanner RSI exit 08-04, GOOGL -5.2%
+   stop-loss 08-11, AMZN -5.1% stop-loss 08-14) **+ 1 earlier (NVDA -5.19%
+   stop-loss 07-17) confirmed via VPS logs but predating the forward-test
+   file itself** (`_save_trade_history` was only added 2026-08-04) — not
+   missing/lost data, just before the tracking code existed. **Stalled,
+   not just slow**: zero trades have closed since 08-14, three weeks as of
+   this update — Main's been sitting on open positions (currently AAPL,
+   IWM) waiting for a stop/trail/exit to fire, not generating new closes.
+   This is the actual bottleneck to real money now, not backtest
+   confidence.
+2. **1 closed crypto trade — met.** BTCUSD -2.19% stop-loss, 2026-08-13,
+   confirmed in `trade_history.json`.
 3. **The `MIN_REENTRY_AGE_HOURS` gate observed firing correctly on a real
    pullback dated after 2026-08-06** (either a real re-entry buy, or a
    `REENTRY_SKIPPED` for a too-young position). Not yet observed — see the
