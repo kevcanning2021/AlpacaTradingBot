@@ -69,6 +69,35 @@ class ResearchAgentTests(unittest.TestCase):
         self.assertFalse(result['veto'])
         self.assertEqual(result['risk_flags'], [])
 
+    def test_headline_naming_unmapped_other_companies_is_ignored(self):
+        """Real bug found live 2026-09-04: a DOJ beef-pricing-probe roundup
+        vetoed COST on 'probe' six times in a row. Alpaca tagged it with only
+        3 symbols (AMZN, COST, WMT) -- right at MAX_ARTICLE_SYMBOLS, so the
+        symbol-count filter alone didn't catch it -- even though the
+        headline itself says "...and 5 Other Retail Giants", 8 companies in
+        substance. Must be skipped on the headline text alone, independent
+        of tag count."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="Trump's DOJ Expands Beef Price Probe to Walmart, Costco, Amazon and 5 Other Retail Giants",
+            symbols=['AMZN', 'COST', 'WMT'],
+        )]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_headline_with_no_other_companies_mention_still_vetoes(self):
+        """Guards against the new pattern being so broad it swallows normal
+        headlines that merely contain the word 'other' without the roundup
+        construction -- must still veto a genuinely focused article."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline='Company faces lawsuit from other former employees',
+            symbols=['AAPL'],
+        )]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertTrue(result['veto'])
+
     def test_keyword_inside_a_longer_word_does_not_match(self):
         """Real bug found live 2026-09-03: 'sues' is a substring of 'issues',
         so a plain `in` check vetoed completely benign headlines like this
