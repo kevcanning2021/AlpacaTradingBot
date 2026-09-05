@@ -72,6 +72,18 @@ NEWS_LIMIT = 15
 # many symbols are skipped entirely, for every keyword, not just 'warns'.
 MAX_ARTICLE_SYMBOLS = 3
 
+# MAX_ARTICLE_SYMBOLS trusts Alpaca's own symbol tags to measure how broad an
+# article is, but found live 2026-09-04: a DOJ beef-pricing-probe roundup was
+# tagged with only 3 symbols (AMZN, COST, WMT) -- sitting right at the
+# boundary, so it wasn't skipped -- even though its own headline says "...and
+# 5 Other Retail Giants", 8 companies in substance. Vetoed COST on 'probe' six
+# times in a row before the 72h window let it age out. "X, Y and N other Z"
+# is a generic news-roundup convention, not specific to this one article, so
+# catching it textually generalizes the same way MAX_ARTICLE_SYMBOLS does --
+# skip regardless of keyword or tag count whenever the headline/summary says
+# outright there are more companies involved than got tagged.
+_OTHER_COMPANIES_PATTERN = re.compile(r'\band\s+\d+\s+other\b', re.IGNORECASE)
+
 # Word-boundary-matched, not a plain substring check -- found live 2026-09-03:
 # 'sues' matched inside 'issues' ("Apple issues strong holiday guidance"), the
 # mirror-image false-positive of the MAX_ARTICLE_SYMBOLS bug above. Compiled
@@ -114,9 +126,12 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=No
 
     matched = []
     for article in articles:
+        raw_text = f"{article.get('headline', '')} {article.get('summary', '')}"
         if len(article.get('symbols', [])) > MAX_ARTICLE_SYMBOLS:
             continue  # broad multi-company piece, not focused on this symbol -- see MAX_ARTICLE_SYMBOLS
-        text = f"{article.get('headline', '')} {article.get('summary', '')}".lower()
+        if _OTHER_COMPANIES_PATTERN.search(raw_text):
+            continue  # headline says there are more companies than Alpaca tagged -- see _OTHER_COMPANIES_PATTERN
+        text = raw_text.lower()
         for keyword, pattern in _KEYWORD_PATTERNS:
             if pattern.search(text):
                 matched.append((keyword, article.get('headline', '')))
