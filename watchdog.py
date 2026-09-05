@@ -28,7 +28,11 @@ historical record, same treatment as every other retired component on this
 box (Mini, Watcher, the old Telegram bot). Research Agent veto
 (RESEARCH_AGENT_VETO_ENABLED) was disabled the same day on all 3 bots for
 the same reason -- it was already a functional no-op under fail-open once
-credits ran out, so disabling it changed no actual trading behavior.
+credits ran out, so disabling it changed no actual trading behavior. Since
+superseded 2026-09-02: replaced with a free, zero-cost keyword-based check
+(agents/research_agent.py / bot/research_agent.py) with no Anthropic
+dependency, and re-enabled on all 3 bots. See check_research_agent_health()
+below, added 2026-09-05, for this watchdog's own visibility into it.
 
 State is kept in a small JSON file so:
 - the same issue doesn't re-alert every 15 min (only on first detection, then
@@ -114,6 +118,39 @@ ACCOUNTS = {
         'secret_key': os.getenv('ALPACA_SECRET_KEY_NOVA', ''),
     },
 }
+
+# Local file paths, not API credentials -- these three bots' own research
+# agents each write their decision history to a JSON file on this same VPS
+# (same paths dashboard/config.py reads for its decision-history panel), so
+# no cross-account auth is needed to read them, just the path.
+RESEARCH_AGENT_DECISIONS_PATHS = {
+    'production': '/opt/alpaca-bot/agent_decisions_state.json',
+    'sofi': '/opt/sofi-bot/agent_decisions_state.json',
+    'trading2': '/opt/trading-2-0/data/research_decisions.json',
+}
+
+# Added 2026-09-05 after a real live miss: a DOJ beef-pricing-probe roundup
+# article, undercounted by agents/research_agent.py's own multi-company
+# filter (see that file's _OTHER_COMPANIES_PATTERN fix), vetoed SOFI's COST
+# six consecutive hourly checks before the user spotted it on the dashboard
+# -- nothing on this VPS was watching the research agent's own decisions for
+# a stuck pattern, only whether the bots were running and trading. This
+# doesn't judge whether a veto is right or wrong (this project's keyword
+# checker was never meant to have that nuance -- see research_agent.py's own
+# docstring) -- it just surfaces "the identical reasoning fired N times in a
+# row" for a human to glance at, the same non-judgmental way stuck_sell in
+# strategy_check.py surfaces a persistent SELL signal without claiming it's
+# wrong. A genuine, still-fresh red flag (e.g. Nova's real MSFT revenue
+# restatement, correctly vetoed 3 times running) will also trip this --
+# that's fine, it's meant to be reviewed either way, not auto-resolved.
+STUCK_VETO_THRESHOLD = 3
+
+# A symbol a bot stops re-checking entirely would otherwise sit at the tail
+# of its own decision history forever and keep alerting on days-old activity
+# as if it were still live -- gates check_research_agent_health() on the most
+# recent decision's own age. Matches research_agent.py's LOOKBACK_HOURS=72,
+# the same window that module already treats as still-relevant news.
+STUCK_VETO_MAX_AGE_HOURS = 72
 
 # Maps an issue key back to which bot it's actually about, so the dashboard can
 # group issues per-bot instead of one flat list -- added 2026-09-02 after the
@@ -222,6 +259,58 @@ def check_new_log_errors(unit, since_iso):
     if bad_lines:
         sample = '\n'.join(bad_lines[-5:])
         issues.append((f'log_errors:{unit}', f'New errors in {unit} log:\n{sample}'))
+    return issues
+
+
+def check_research_agent_health(account_key, label, decisions_path):
+    """Flags a symbol whose last STUCK_VETO_THRESHOLD+ research-agent
+    decisions were all vetoes on the identical reasoning string -- see
+    STUCK_VETO_THRESHOLD above for why this exists and what it deliberately
+    doesn't claim to judge. Each bot's decisions file is {symbol: [decision,
+    ...]} oldest-first (agents/state.py's record_decision / bot/
+    research_agent.py's _record_decision both append), so the tail of each
+    symbol's list is its most recent consecutive checks.
+
+    Recency-gated on the last entry's own timestamp, not just position in the
+    list -- a symbol a bot stops re-checking entirely (e.g. it drops off the
+    watchlist, or just stops generating fresh candidate signals) would
+    otherwise sit at the tail of its own history forever, alerting on
+    days-old activity as if it were still happening right now. STUCK_VETO_
+    MAX_AGE_HOURS mirrors research_agent.py's own LOOKBACK_HOURS=72 -- the
+    same window that module already treats as still relevant."""
+    issues = []
+    if not os.path.exists(decisions_path):
+        return issues
+    try:
+        with open(decisions_path) as f:
+            decisions = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        issues.append((f'{account_key}:research_agent_read_error',
+                        f'[{label}] Failed to read research agent decisions at {decisions_path}: {e}'))
+        return issues
+
+    now = datetime.now(timezone.utc)
+    for symbol, entries in decisions.items():
+        recent = entries[-STUCK_VETO_THRESHOLD:]
+        if len(recent) < STUCK_VETO_THRESHOLD:
+            continue
+        last_ts = recent[-1].get('timestamp')
+        if not last_ts:
+            continue
+        try:
+            age_hours = (now - datetime.fromisoformat(last_ts)).total_seconds() / 3600
+        except ValueError:
+            continue
+        if age_hours > STUCK_VETO_MAX_AGE_HOURS:
+            continue  # stale history a bot stopped re-checking, not an ongoing block
+        reasonings = {e.get('reasoning') for e in recent}
+        if all(e.get('veto') for e in recent) and len(reasonings) == 1:
+            issues.append((
+                f'{account_key}:stuck_veto:{symbol}',
+                f'[{label}] {symbol} has been vetoed {len(recent)} consecutive checks on the identical '
+                f'reasoning ("{recent[-1].get("reasoning")}") -- worth a look: either still-fresh evidence '
+                f'(fine, no action needed) or a stale/broad article that should have aged out or been filtered'
+            ))
     return issues
 
 
@@ -357,6 +446,12 @@ def main():
             print(f"check_new_log_errors({account_key}) failed: {e}")
             all_issues.append((f'watchdog_internal_error:check_new_log_errors:{account_key}', f'watchdog: check_new_log_errors crashed for {cfg["label"]}: {e}'))
         last_log_check[cfg['log_unit']] = now.isoformat()
+
+        try:
+            all_issues += check_research_agent_health(account_key, cfg['label'], RESEARCH_AGENT_DECISIONS_PATHS[account_key])
+        except Exception as e:
+            print(f"check_research_agent_health({account_key}) failed: {e}")
+            all_issues.append((f'watchdog_internal_error:check_research_agent_health:{account_key}', f'watchdog: check_research_agent_health crashed for {cfg["label"]}: {e}'))
 
     current_keys = {key for key, _ in all_issues}
 
