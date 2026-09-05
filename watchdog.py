@@ -43,6 +43,7 @@ State is kept in a small JSON file so:
 """
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 
@@ -83,6 +84,34 @@ GIT_REPOS = {
     'alpaca-bot-test': '/opt/alpaca-bot-test',
     'fleet-review-agent': '/opt/fleet-review-agent',
 }
+
+# Added 2026-09-05 after rotating a real exposed Nova API key/secret (an
+# unrelated dataclass repr in a test failure printed both into a Claude
+# session's own output -- not this VPS -- but the same failure mode is
+# entirely possible here too: any future exception or log line that reprs a
+# config object embeds the real credential). Two independent checks, in
+# check_secrets_hygiene() and check_new_log_errors() below, built generally
+# rather than treating this as a one-off. trading-2-0 has no git repo on
+# this box (see GIT_REPOS comment above) so it only gets the permission
+# check, not the git-tracked check.
+ENV_FILES = {
+    'alpaca-bot': '/opt/alpaca-bot/.env',
+    'sofi-bot': '/opt/sofi-bot/.env',
+    'alpaca-dashboard': '/opt/alpaca-dashboard/dashboard/.env',
+    'alpaca-bot-test': '/opt/alpaca-bot-test/.env',
+    'trading-2-0': '/opt/trading-2-0/.env',
+}
+
+# Alpaca key IDs are PK + 26 uppercase-alphanumeric chars -- a distinctive
+# enough shape that a match in a log line is a real credential, not a false
+# positive off an order/asset UUID (which has dashes) or a price/symbol.
+# The secret pattern requires "secret" to appear nearby on the same line
+# (case-insensitive) rather than matching any 40-44 char alnum string on its
+# own, which would false-positive constantly (order IDs, hashes, etc.) --
+# this still catches both the literal .env line shape (SECRET_KEY_X=...) and
+# a Python repr (secret_key='...'), which is exactly the real incident.
+_LEAKED_KEY_ID_PATTERN = re.compile(r'\bPK[A-Z0-9]{26}\b')
+_LEAKED_SECRET_PATTERN = re.compile(r"(?i)secret[a-z_]*\s*[=:]\s*['\"]?([A-Za-z0-9+/]{40,44})\b")
 
 # Accounts this watchdog checks positions/orders for, and whose service log
 # gets scanned for new tracebacks/ERROR lines. Test's own credentials come
@@ -173,6 +202,7 @@ REPO_TO_BOT = {
     'alpaca-dashboard': 'Infra',
     'alpaca-bot-test': 'Infra',
     'fleet-review-agent': 'Infra',
+    'trading-2-0': 'Nova',  # not a git repo (see GIT_REPOS), only used by check_secrets_hygiene's ENV_FILES keys
 }
 ACCOUNT_KEY_TO_BOT = {
     'production': 'Main',
@@ -183,9 +213,9 @@ ACCOUNT_KEY_TO_BOT = {
 
 def bot_for_key(key: str) -> str:
     prefix = key.split(':', 1)[0]
-    if prefix == 'service_down' or prefix == 'log_errors':
+    if prefix == 'service_down' or prefix == 'log_errors' or prefix == 'leaked_credential':
         return SERVICE_TO_BOT.get(key.split(':', 1)[1], 'Infra')
-    if prefix == 'git_drift':
+    if prefix == 'git_drift' or prefix == 'secrets_hygiene':
         return REPO_TO_BOT.get(key.split(':')[1], 'Infra')
     if prefix == 'watchdog_internal_error':
         parts = key.split(':')
@@ -255,10 +285,24 @@ def check_new_log_errors(unit, since_iso):
     else:
         cmd += ['-n', '50']
     result = subprocess.run(cmd, capture_output=True, text=True)
-    bad_lines = [l for l in result.stdout.splitlines() if 'Traceback' in l or 'ERROR' in l]
+    lines = result.stdout.splitlines()
+    bad_lines = [l for l in lines if 'Traceback' in l or 'ERROR' in l]
     if bad_lines:
         sample = '\n'.join(bad_lines[-5:])
         issues.append((f'log_errors:{unit}', f'New errors in {unit} log:\n{sample}'))
+
+    # Added 2026-09-05 after rotating a real exposed Nova key/secret -- see
+    # ENV_FILES comment above. Deliberately does NOT include the matched
+    # value in the alert message (would defeat the whole point by putting
+    # the secret into watchdog_state.json / Telegram / the dashboard) --
+    # only which line number and which pattern matched.
+    for i, line in enumerate(lines):
+        if _LEAKED_KEY_ID_PATTERN.search(line) or _LEAKED_SECRET_PATTERN.search(line):
+            issues.append((f'leaked_credential:{unit}',
+                            f'{unit} log line {i} matches an Alpaca credential shape -- a real key/secret may have '
+                            f'been logged. Value redacted here; check the raw journal directly, then rotate the '
+                            f'credential (see the 2026-09-05 Nova rotation for the deploy-everywhere checklist).'))
+            break  # one hit is enough to alert; don't scan/report every line once found
     return issues
 
 
@@ -336,6 +380,42 @@ def check_git_drift():
         if dirty:
             sample = '\n'.join(dirty.splitlines()[:10])
             issues.append((f'git_drift:{name}', f'{name} ({path}) has uncommitted changes:\n{sample}'))
+    return issues
+
+
+def check_secrets_hygiene():
+    """Two independent .env risks per fleet repo -- see ENV_FILES comment
+    above for why this exists. (1) accidentally tracked by git: every commit
+    on this VPS is made locally first, then relayed to GitHub from the
+    user's own machine (see the "VPS has no GitHub push access" project
+    notes) -- a `.env` swept into a careless `git add -A` wouldn't be caught
+    until it reached GitHub, by which point it's in permanent history. (2)
+    group/world-readable permissions (should always be 600, root-only) --
+    confirmed all currently 600 as of 2026-09-05, this keeps it that way."""
+    issues = []
+    for name, path in ENV_FILES.items():
+        if not os.path.exists(path):
+            continue
+
+        repo_dir = GIT_REPOS.get(name)
+        if repo_dir:
+            try:
+                relpath = os.path.relpath(path, repo_dir)
+                result = subprocess.run(['git', 'ls-files', '--error-unmatch', relpath], cwd=repo_dir,
+                                         capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    issues.append((f'secrets_hygiene:{name}:tracked',
+                                    f'{name}: {path} is tracked by git -- real credentials could reach GitHub on the next push'))
+            except Exception as e:
+                issues.append((f'secrets_hygiene:{name}:error', f'{name}: failed to check git tracking for .env: {e}'))
+
+        try:
+            mode = oct(os.stat(path).st_mode)[-3:]
+            if mode != '600':
+                issues.append((f'secrets_hygiene:{name}:permissions',
+                                f'{name}: {path} has permissions {mode}, expected 600'))
+        except Exception as e:
+            issues.append((f'secrets_hygiene:{name}:error', f'{name}: failed to check .env permissions: {e}'))
     return issues
 
 
@@ -429,6 +509,12 @@ def main():
     except Exception as e:
         print(f"check_git_drift failed: {e}")
         all_issues.append(('watchdog_internal_error:check_git_drift', f'watchdog: check_git_drift crashed: {e}'))
+
+    try:
+        all_issues += check_secrets_hygiene()
+    except Exception as e:
+        print(f"check_secrets_hygiene failed: {e}")
+        all_issues.append(('watchdog_internal_error:check_secrets_hygiene', f'watchdog: check_secrets_hygiene crashed: {e}'))
 
     for account_key, cfg in ACCOUNTS.items():
         try:
