@@ -236,7 +236,12 @@ watchlist, using the exact live scanner logic:
   future attempt would need either a properly out-of-sample-validated
   screen from the start, or a fundamentally different approach (e.g.
   correlation/sector diversification analysis instead of pure backtest
-  performance).
+  performance). **Superseded 2026-09-06 for the dual-signal engine
+  specifically** — see "Watchlist: 7 → 13 symbols" below. This
+  conclusion (and IWM's specific rejection two paragraphs up) was
+  measured against the single EMA9/21+RSI strategy; it doesn't
+  automatically carry over once Bollinger is a second, independent
+  signal source on top of it.
 
 Tested 2026-08-07 against 600 real daily bars (proper 300/300 train/holdout
 split, full walk-forward simulation including stop-loss/trailing-stop, not
@@ -336,6 +341,54 @@ trade proves nothing about the 70.5%/+1.66% edge by itself — revisit
 alongside milestone 1 below once more accumulate. Sofi runs the identical
 code/flag; Nova doesn't share this codebase (different multi-timeframe
 strategy) and wasn't touched.
+
+## Watchlist: 7 → 13 symbols (retroactively documented 2026-09-06)
+
+**This section exists to close a real process gap, not just record a
+number.** Main's live `.env` `WATCHLIST` grew from the validated 7
+(AAPL, MSFT, GOOGL, AMZN, NVDA, SPY, QQQ) to 13 (+ FXE, UUP, TSLA, GLD,
+IWM, XLF) at some point after the dual-signal Bollinger rollout,
+without ever being re-backtested or written down here — found during a
+2026-09-05 fleet-wide audit, by diffing the live `.env` against this
+doc's own "current 7" language, not by anyone deciding to widen it.
+`IWM` specifically is one of the 14 symbols the 2026-07-23 systematic
+screen above found to be curve-fit and explicitly did **not**
+implement — it was live anyway.
+
+**Re-tested properly before deciding what to do about it** (460 real
+daily bars, current dual-signal engine — Bollinger + EMA, live
+thresholds, 5%/8% stop/trail, no reentry/sizing complexity, so absolute
+numbers won't match the "current thresholds" backtests above exactly,
+but the added-vs-original comparison is apples-to-apples since both run
+the identical engine):
+
+| Set | Trades | Win % | Avg/trade | Total |
+|---|---|---|---|---|
+| Original 7 | 92 | 56.5% | +1.33% | +121.9% |
+| Added 6 | 80 | 62.5% | +0.82% | +65.6% |
+| Combined 13 | 172 | 59.3% | +1.09% | +187.5% |
+
+Every one of the added 6 was individually profitable in this window,
+including `IWM` (+0.64%/trade, 63.6% win) — the dual-signal engine
+changes what actually gets traded on a symbol (a Bollinger oversold
+bounce is a different setup than the EMA9/21 crossover IWM was
+rejected under), so the old rejection doesn't automatically transfer.
+**Decision: keep the 13-symbol watchlist** — the combined set has
+higher total return than the original 7 alone and doesn't dilute
+per-trade quality, on top of more trade frequency (a real, separate
+problem this doc already documents at length above). One real soft
+spot in this same test: `NVDA` in the original 7 came back
+-1.31%/trade (9 of 17 trades stopped out) in this specific window —
+noted for future reference, not acted on; one rough window on real,
+long-validated data isn't grounds to drop a 7-year-tenured symbol.
+
+**Process fix, not just a one-time backtest**: `/opt/alpaca-bot/daily_fleet_audit.py`
+(cron, 06:13 UTC daily, independent of any Claude session) now compares
+`WATCHLIST`/`BUY_RSI_MAX`/`SELL_RSI_MIN` against the previous day's own
+run and flags the day something changes, so a future drift like this
+one gets caught within 24 hours instead of sitting unnoticed for
+however long this one did. See `fleet_audit_log.json` for the daily
+record.
 
 ## Automated monitoring: `strategy_check.py`
 
