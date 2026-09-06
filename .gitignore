@@ -14,3 +14,4 @@ venv/
 position_method_state.json
 agent_decisions_state.json
 .claude/
+fleet_audit_log.json
