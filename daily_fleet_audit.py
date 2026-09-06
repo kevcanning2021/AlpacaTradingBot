@@ -31,8 +31,10 @@ from telegram_notifier import TelegramNotifier
 from config import settings
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fleet_audit_log.json')
+PEAK_PRICES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'peak_prices_state.json')
 MAX_LOG_ENTRIES = 30
 BACKTEST_BARS = 460
+NEAR_STOP_THRESHOLD_PCT = 20.0  # flag once a position has covered 80%+ of the distance to its own stop
 
 STOP_LOSS = settings.STOP_LOSS_THRESHOLD
 TRAILING_STOP = settings.TRAILING_STOP_THRESHOLD
@@ -123,6 +125,49 @@ def forward_test_snapshot():
     }
 
 
+def check_stop_distance(positions, peak_prices):
+    """For each open position, finds the binding stop (whichever of the
+    entry-anchored stop-loss or the peak-anchored trailing stop is nearer to
+    the current price -- for a long, that's whichever price is HIGHER) and
+    reports how much of the way there the position has already travelled, as
+    a % of the full stop distance from entry/peak. Flags anything past
+    NEAR_STOP_THRESHOLD_PCT so a real, close call surfaces here instead of
+    only being found by hand, the way today's fleet audit had to.
+
+    `positions` is Alpaca's own get_positions() list; `peak_prices` is
+    peak_prices_state.json's {symbol: float} dict (trader.py's own tracked
+    peak, not re-derived here -- this must read the same source of truth
+    the live trailing-stop logic actually uses, not approximate it)."""
+    results = []
+    for p in positions:
+        symbol = p['symbol']
+        entry = float(p['avg_entry_price'])
+        current = float(p['current_price'])
+        is_crypto = p.get('asset_class') == 'crypto'
+        stop_pct = settings.CRYPTO_STOP_LOSS_THRESHOLD if is_crypto else settings.STOP_LOSS_THRESHOLD
+        trail_pct = settings.CRYPTO_TRAILING_STOP_THRESHOLD if is_crypto else settings.TRAILING_STOP_THRESHOLD
+
+        entry_stop_price = entry * (1 - stop_pct)
+        peak = peak_prices.get(symbol, entry)
+        trail_stop_price = peak * (1 - trail_pct)
+        # For a long position the binding stop is whichever level is closer
+        # to (i.e. higher than) the current price -- that's the one that
+        # would actually trigger first.
+        binding_stop = max(entry_stop_price, trail_stop_price)
+        binding_kind = 'trailing' if trail_stop_price >= entry_stop_price else 'entry'
+
+        full_distance = peak - binding_stop if binding_kind == 'trailing' else entry - binding_stop
+        remaining = current - binding_stop
+        pct_of_the_way_there = round((1 - remaining / full_distance) * 100, 1) if full_distance > 0 else 0.0
+
+        results.append({
+            'symbol': symbol, 'current_price': current, 'binding_stop': round(binding_stop, 2),
+            'binding_kind': binding_kind, 'pct_of_the_way_to_stop': pct_of_the_way_there,
+            'near_stop': pct_of_the_way_there >= (100 - NEAR_STOP_THRESHOLD_PCT),
+        })
+    return results
+
+
 def detect_drift(bot_label, watchlist, prior_entry):
     """Compares today's live WATCHLIST/threshold values against the most
     recent prior log entry (not against STRATEGY.md's prose, which isn't
@@ -159,9 +204,18 @@ def main():
     log = load_log()
     prior_entry = log[-1] if log else None
 
+    client = AlpacaClient()
+    positions = client.get_positions()
+    peak_prices = {}
+    if os.path.exists(PEAK_PRICES_FILE):
+        with open(PEAK_PRICES_FILE) as f:
+            peak_prices = json.load(f)
+
     backtest = run_backtest(settings.WATCHLIST)
     forward = forward_test_snapshot()
     drift = detect_drift('Main', settings.WATCHLIST, prior_entry)
+    stop_distances = check_stop_distance(positions, peak_prices)
+    near_stop = [s for s in stop_distances if s['near_stop']]
 
     entry = {
         'date': datetime.now(timezone.utc).date().isoformat(),
@@ -170,6 +224,7 @@ def main():
         'forward_test': forward,
         'config_snapshot': drift['current'],
         'drift_detected': drift['changed'],
+        'stop_distances': stop_distances,
     }
     log.append(entry)
     save_log(log)
@@ -179,13 +234,22 @@ def main():
         f"{backtest['win_rate_pct']}% win, {backtest['expectancy_pct']:+.2f}%/trade" if backtest['trade_count'] else
         f"Daily audit ({entry['date']}): backtest produced 0 trades (check data feed)",
         f"Forward test: {forward['closed_trades']} real closed trades, ${forward.get('total_pnl', 0):+.2f} total P&L",
+        f"Open positions: {len(stop_distances)}, "
+        + (', '.join(f"{s['symbol']} {s['pct_of_the_way_to_stop']}% to {s['binding_kind']} stop" for s in stop_distances)
+           if stop_distances else 'none'),
     ]
     if drift['changed']:
         lines.append(f"WATCHLIST/threshold drift detected since last run: {drift['prior']} -> {drift['current']}")
+    if near_stop:
+        near_stop_desc = ', '.join(
+            f"{s['symbol']} is {s['pct_of_the_way_to_stop']}% of the way to its {s['binding_kind']} stop"
+            for s in near_stop
+        )
+        lines.append(f"NEAR STOP: {near_stop_desc}")
 
     message = '\n'.join(lines)
     print(message)
-    if drift['changed']:
+    if drift['changed'] or near_stop:
         TelegramNotifier().send('Daily Fleet Audit', message)
 
 

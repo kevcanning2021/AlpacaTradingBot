@@ -15,6 +15,59 @@ from unittest.mock import patch
 import daily_fleet_audit as audit
 
 
+def _position(symbol, entry, current, asset_class='us_equity'):
+    return {'symbol': symbol, 'avg_entry_price': str(entry), 'current_price': str(current), 'asset_class': asset_class}
+
+
+class StopDistanceTests(unittest.TestCase):
+    def test_fresh_position_with_no_movement_is_not_near_its_stop(self):
+        """Just entered, price hasn't moved at all -- 0% of the way to the
+        entry-anchored stop, nowhere near a flag."""
+        results = audit.check_stop_distance([_position('AAPL', 100, 100)], {'AAPL': 100})
+        self.assertEqual(results[0]['binding_kind'], 'entry')
+        self.assertEqual(results[0]['pct_of_the_way_to_stop'], 0.0)
+        self.assertFalse(results[0]['near_stop'])
+
+    def test_position_just_above_its_trailing_stop_is_flagged(self):
+        """Real scenario a trailing stop exists for: ran up to a peak, has
+        since pulled back most of the way to the 8% trailing stop -- must be
+        caught, and correctly attributed to the trailing stop, not the
+        entry stop, since the trailing stop (101.2) is the higher, nearer
+        level for a long position."""
+        results = audit.check_stop_distance([_position('AAPL', 100, 101.4)], {'AAPL': 110})
+        self.assertEqual(results[0]['binding_kind'], 'trailing')
+        self.assertGreater(results[0]['pct_of_the_way_to_stop'], 95)
+        self.assertTrue(results[0]['near_stop'])
+
+    def test_position_just_above_its_entry_stop_is_flagged(self):
+        """No rally since entry (peak == entry), so the entry-anchored stop
+        is the binding one -- pulled back to just above the 5% stop."""
+        results = audit.check_stop_distance([_position('AAPL', 100, 95.2)], {'AAPL': 100})
+        self.assertEqual(results[0]['binding_kind'], 'entry')
+        self.assertGreater(results[0]['pct_of_the_way_to_stop'], 90)
+        self.assertTrue(results[0]['near_stop'])
+
+    def test_position_comfortably_clear_of_either_stop_is_not_flagged(self):
+        results = audit.check_stop_distance([_position('AAPL', 100, 99)], {'AAPL': 100})
+        self.assertLess(results[0]['pct_of_the_way_to_stop'], 30)
+        self.assertFalse(results[0]['near_stop'])
+
+    def test_missing_peak_price_falls_back_to_entry(self):
+        """A brand-new position may not have a peak_prices_state.json entry
+        yet (trader.py only writes it on its own next check cycle) -- must
+        not crash, and should behave as if the peak is the entry price."""
+        results = audit.check_stop_distance([_position('NEWSYM', 100, 100)], {})
+        self.assertEqual(results[0]['pct_of_the_way_to_stop'], 0.0)
+
+    def test_crypto_position_uses_crypto_thresholds(self):
+        """Crypto's wider 15%/20% stop/trail must be used, not the stock
+        5%/8% -- a position 6% below entry would wrongly look 'near stop'
+        under the stock threshold but isn't under crypto's."""
+        results = audit.check_stop_distance(
+            [_position('BTC/USD', 100, 94, asset_class='crypto')], {'BTC/USD': 100})
+        self.assertFalse(results[0]['near_stop'])
+
+
 class DriftDetectionTests(unittest.TestCase):
     def test_first_ever_run_reports_no_drift(self):
         """Nothing to compare against yet -- must not flag every value as
