@@ -62,6 +62,18 @@ PEAK_PRICES_PATHS = {
 # as PEAK_PRICES_PATHS above.
 NOVA_JOURNAL_DB_PATH = os.getenv('NOVA_JOURNAL_DB_PATH', '/opt/trading-2-0/data/trade_journal.db')
 
+# Each bot's own daily_fleet_audit.py (cron, independent of any Claude
+# session -- see project notes) appends one entry per day to its own
+# fleet_audit_log.json: a fresh backtest, a forward-test snapshot, watchlist/
+# threshold drift detection, and how close each open position is to its
+# stop. Read directly like the paths above -- same non-Alpaca-data pattern,
+# one file per bot's own process.
+FLEET_AUDIT_LOG_PATHS = {
+    'main': os.getenv('FLEET_AUDIT_LOG_PATH_MAIN', '/opt/alpaca-bot/fleet_audit_log.json'),
+    'sofi': os.getenv('FLEET_AUDIT_LOG_PATH_SOFI', '/opt/sofi-bot/fleet_audit_log.json'),
+    'nova': os.getenv('FLEET_AUDIT_LOG_PATH_NOVA', '/opt/trading-2-0/fleet_audit_log.json'),
+}
+
 # Mirrors trader.py's own constants (Main/Sofi's shared codebase) -- these
 # aren't read from either bot's .env (STOP_LOSS_THRESHOLD/TRAILING_STOP_
 # THRESHOLD are plain hardcoded constants there, not env-configurable), so

@@ -23,6 +23,7 @@ AGENTS_OVERVIEW_TTL = 10
 RESEARCH_AGENT_DECISIONS_TTL = 10
 RESEARCH_AGENT_DECISIONS_LIMIT = 50
 ISSUES_TTL = 10
+FLEET_AUDIT_TTL = 300  # each bot's log only gains one new entry per day (cron, ~06:00 UTC) -- no need to re-read every 10s
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -335,6 +336,43 @@ async def issues(request):
     return JSONResponse(data)
 
 
+def _load_fleet_audit():
+    """Reads each bot's own daily_fleet_audit.py log (cron, independent of
+    any Claude session -- one process per bot, own venv, own schedule) and
+    returns just the most recent entry per bot, tagged with which bot it
+    came from. A missing file just means that bot's first cron run hasn't
+    fired yet, not an error -- same fault-tolerant-per-source pattern as
+    _load_research_decisions above, so one bot's unreadable log can't 502
+    the other two."""
+    latest = []
+    for bot, path in config.FLEET_AUDIT_LOG_PATHS.items():
+        try:
+            with open(path) as f:
+                log = json.load(f)
+        except FileNotFoundError:
+            continue
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(f"[dashboard] Failed to read {bot} fleet audit log ({path}): {e}")
+            continue
+        if log:
+            latest.append(dict(log[-1], bot=bot))
+    return latest
+
+
+async def fleet_audit(request):
+    """Surfaces each bot's own daily backtest/forward-test/drift/stop-distance
+    check on the dashboard itself, so 'how'd the run go' doesn't require
+    SSHing in and reading fleet_audit_log.json by hand -- see project notes
+    on daily_fleet_audit.py for why this runs as a plain cron script rather
+    than anything session-dependent."""
+    try:
+        data = await get_or_fetch('fleet_audit', 'latest', FLEET_AUDIT_TTL, _load_fleet_audit)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"[dashboard] Failed to read fleet audit log: {e}")
+        return JSONResponse({'error': str(e)}, status_code=502)
+    return JSONResponse(data)
+
+
 async def index(request):
     return FileResponse(STATIC_DIR / 'index.html')
 
@@ -350,6 +388,7 @@ routes = [
     Route('/api/agents-overview', agents_overview),
     Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),
+    Route('/api/fleet-audit', fleet_audit),
     Mount('/static', app=StaticFiles(directory=str(STATIC_DIR)), name='static'),
 ]
 

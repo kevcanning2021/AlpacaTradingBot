@@ -79,14 +79,16 @@ async function refresh() {
     // before) because issues now render AS per-bot icons on the agent rows
     // themselves rather than as their own always-visible text panel -- see
     // renderAgentsOverview/renderInfraIssues.
-    const [agents, decisions, issues] = await Promise.all([
+    const [agents, decisions, issues, fleetAudit] = await Promise.all([
       api('/api/agents-overview').then((r) => r.json()),
       api('/api/research-agent/decisions').then((r) => r.json()),
       api('/api/issues').then((r) => r.json()),
+      api('/api/fleet-audit').then((r) => r.json()),
     ]);
     renderAgentsOverview(agents, issues);
     renderResearchAgentDecisions(decisions);
     renderInfraIssues(issues);
+    renderFleetAudit(fleetAudit);
 
     const accountCalls = [];
     if (currentAccount) {
@@ -202,6 +204,57 @@ function renderFilteredDecisions() {
   });
   if (!shown.length) {
     list.innerHTML = `<p class="hint">${showAllDecisions ? 'No decisions logged yet' : 'No vetoes yet — nothing blocked so far'}</p>`;
+  }
+}
+
+function renderFleetAudit(entries) {
+  // Main/Sofi's backtest is %-based (scanner.py's engine), Nova's is R-based
+  // (bot/backtester.py's engine, since its risk sizing is R-multiple-native)
+  // -- two different shapes from two genuinely different engines, not an
+  // inconsistency to paper over. Render whichever fields a given entry
+  // actually has rather than forcing one shape.
+  const list = document.getElementById('fleet-audit-list');
+  const order = { main: 0, sofi: 1, nova: 2 };
+  const sorted = [...entries].sort((a, b) => (order[a.bot] ?? 9) - (order[b.bot] ?? 9));
+  list.innerHTML = '';
+  sorted.forEach((e) => {
+    const bot = e.bot ? e.bot[0].toUpperCase() + e.bot.slice(1) : '-';
+    const bt = e.backtest || {};
+    const trades = bt.trade_count !== undefined ? bt.trade_count : bt.total_trades;
+    const win = bt.win_rate_pct !== undefined ? bt.win_rate_pct : bt.long_win_rate_pct;
+    const expectancy = bt.expectancy_pct !== undefined
+      ? `${bt.expectancy_pct > 0 ? '+' : ''}${bt.expectancy_pct}%/trade`
+      : (bt.long_avg_r !== undefined ? `${bt.long_avg_r > 0 ? '+' : ''}${bt.long_avg_r}R avg` : '');
+    const ft = e.forward_test || {};
+    const ftResult = ft.total_pnl !== undefined ? money(ft.total_pnl)
+      : (ft.total_r !== undefined ? `${ft.total_r > 0 ? '+' : ''}${ft.total_r}R` : '');
+    const driftBadge = e.drift_detected ? '<span class="badge badge-red" title="Watchlist or threshold changed since yesterday\'s run">Drift</span>' : '';
+    const stops = e.stop_distances || [];
+    const stopTags = stops.length
+      ? stops.map((s) => `<span class="tag${s.near_stop ? ' tag-warn' : ''}">${s.symbol} ${s.pct_of_the_way_to_stop}% to stop</span>`).join('')
+      : '<span class="hint" style="margin:0;">No open positions</span>';
+
+    const item = document.createElement('div');
+    item.className = 'decision-item';
+    item.innerHTML = `
+      <div class="item-top">
+        <span class="item-title">${bot}</span>
+        <span class="item-sub">${e.date || ''}</span>
+        ${driftBadge}
+      </div>
+      <div class="item-meta">
+        <span>${trades !== undefined ? trades + ' backtest trades' : 'no backtest yet'}</span>
+        ${win !== undefined ? `<span>${win}% win</span>` : ''}
+        ${expectancy ? `<span>${expectancy}</span>` : ''}
+      </div>
+      <div class="item-meta">
+        <span>Forward test: ${ft.closed_trades || 0} real trade${ft.closed_trades === 1 ? '' : 's'}${ftResult ? ', ' + ftResult : ''}</span>
+      </div>
+      <div class="item-meta">${stopTags}</div>`;
+    list.appendChild(item);
+  });
+  if (!sorted.length) {
+    list.innerHTML = '<p class="hint">No audit data yet — each bot\'s first daily run hasn\'t fired</p>';
   }
 }
 
@@ -330,6 +383,12 @@ document.getElementById('research-agent-filter-toggle').addEventListener('click'
   showAllDecisions = !showAllDecisions;
   e.target.textContent = showAllDecisions ? 'Vetoes only' : 'Show all';
   renderFilteredDecisions();
+});
+
+document.getElementById('fleet-audit-toggle').addEventListener('click', (e) => {
+  const body = document.getElementById('fleet-audit-body');
+  const nowHidden = body.classList.toggle('hidden');
+  e.target.textContent = 'Daily Fleet Audit ' + (nowHidden ? '▸' : '▾');
 });
 
 (async function init() {
