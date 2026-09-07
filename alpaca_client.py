@@ -58,6 +58,19 @@ class AlpacaClient:
             return json.loads(body)
         else:
             raise Exception(f"Failed to get account: {status} - {body}")
+
+    def get_clock(self) -> Dict:
+        """The NYSE market clock -- same for every account (stocks, not
+        crypto, which trades 24/7 regardless). Added 2026-09-07 after a
+        Labor Day market holiday looked like a stuck bot on the dashboard:
+        the stock scan correctly skipped for the day, but nothing told the
+        user that's what happened, since crypto kept running normally the
+        whole time and made everything else look alive."""
+        status, body = self._request('GET', '/clock')
+        if status == 200:
+            return json.loads(body)
+        else:
+            raise Exception(f"Failed to get clock: {status} - {body}")
     
     def get_positions(self) -> List[Dict]:
         """Get all open positions"""

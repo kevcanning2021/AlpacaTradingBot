@@ -24,6 +24,7 @@ RESEARCH_AGENT_DECISIONS_TTL = 10
 RESEARCH_AGENT_DECISIONS_LIMIT = 50
 ISSUES_TTL = 10
 FLEET_AUDIT_TTL = 300  # each bot's log only gains one new entry per day (cron, ~06:00 UTC) -- no need to re-read every 10s
+MARKET_STATUS_TTL = 300  # market open/closed state changes at most twice a day
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -373,6 +374,27 @@ async def fleet_audit(request):
     return JSONResponse(data)
 
 
+async def market_status(request):
+    """The NYSE clock -- same for every account, so this always asks Main's
+    client regardless of which account tab is selected (crypto trades 24/7
+    and isn't what this is about). Added 2026-09-07: a Labor Day market
+    holiday looked exactly like a stuck bot on the dashboard -- crypto kept
+    scanning normally the whole time, so everything else still looked
+    alive, and nothing told the user the stock scan had correctly gone
+    quiet for the day rather than hung."""
+    client = get_client('prod')
+    try:
+        data = await get_or_fetch('market', 'clock', MARKET_STATUS_TTL, client.get_clock)
+    except Exception as e:
+        logger.error(f"[dashboard] Failed to fetch market clock: {e}")
+        return JSONResponse({'error': str(e)}, status_code=502)
+    return JSONResponse({
+        'is_open': data.get('is_open'),
+        'next_open': data.get('next_open'),
+        'next_close': data.get('next_close'),
+    })
+
+
 async def index(request):
     return FileResponse(STATIC_DIR / 'index.html')
 
@@ -389,6 +411,7 @@ routes = [
     Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),
     Route('/api/fleet-audit', fleet_audit),
+    Route('/api/market-status', market_status),
     Mount('/static', app=StaticFiles(directory=str(STATIC_DIR)), name='static'),
 ]
 

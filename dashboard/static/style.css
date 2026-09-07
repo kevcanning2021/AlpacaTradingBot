@@ -67,6 +67,16 @@ header { display: flex; justify-content: space-between; align-items: center; mar
   padding: 8px; border-radius: 8px;
 }
 
+/* Calm/informational, not alarm-colored like offline-banner above -- market
+   closed (nights, weekends, holidays) is the normal state for most of any
+   given week, not a fault. Exists so a quiet stock scan (crypto keeps
+   running 24/7 regardless) doesn't read as a stuck bot -- see the 2026-09-07
+   Labor Day case this was built for. */
+#market-status-banner {
+  text-align: center; background: #1e293b; color: #93c5fd;
+  padding: 8px; border-radius: 8px; margin: 10px 0; font-size: 0.85rem;
+}
+
 .hint { font-size: 0.8rem; color: #888; margin: -6px 0 10px; }
 
 .agents-overview { display: flex; flex-direction: column; gap: 10px; }

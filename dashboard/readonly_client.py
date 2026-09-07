@@ -20,3 +20,6 @@ class ReadOnlyAlpacaClient:
 
     def get_orders(self, status: str = 'all', limit: int = 50) -> List[Dict]:
         return self._client.get_orders(status=status)[:limit]
+
+    def get_clock(self) -> Dict:
+        return self._client.get_clock()

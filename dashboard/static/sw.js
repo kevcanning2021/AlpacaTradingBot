@@ -5,7 +5,7 @@
 // bumping this version is what actually makes a shell-file change visible
 // to an already-open browser -- the SW only detects an update by byte-
 // diffing sw.js itself. Bump it EVERY time, not just when convenient.
-const SHELL_CACHE = 'shell-v12';
+const SHELL_CACHE = 'shell-v13';
 const SHELL_FILES = [
   '/',
   '/static/style.css',

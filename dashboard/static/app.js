@@ -79,16 +79,18 @@ async function refresh() {
     // before) because issues now render AS per-bot icons on the agent rows
     // themselves rather than as their own always-visible text panel -- see
     // renderAgentsOverview/renderInfraIssues.
-    const [agents, decisions, issues, fleetAudit] = await Promise.all([
+    const [agents, decisions, issues, fleetAudit, marketStatus] = await Promise.all([
       api('/api/agents-overview').then((r) => r.json()),
       api('/api/research-agent/decisions').then((r) => r.json()),
       api('/api/issues').then((r) => r.json()),
       api('/api/fleet-audit').then((r) => r.json()),
+      api('/api/market-status').then((r) => r.json()),
     ]);
     renderAgentsOverview(agents, issues);
     renderResearchAgentDecisions(decisions);
     renderInfraIssues(issues);
     renderFleetAudit(fleetAudit);
+    renderMarketStatus(marketStatus);
 
     const accountCalls = [];
     if (currentAccount) {
@@ -169,6 +171,25 @@ function renderInfraIssues(issues) {
   const textEl = document.getElementById('infra-issue-text');
   if (flagEl) flagEl.innerHTML = issueFlag(infra);
   if (textEl) textEl.innerHTML = issueText(infra);
+}
+
+function renderMarketStatus(status) {
+  // Stock market closed (nights, weekends, holidays) is the normal state
+  // for most of any given week -- not an error, so this is calm/blue, not
+  // red like offline-banner. Exists so a quiet stock scan doesn't read as a
+  // stuck bot: crypto keeps running 24/7 regardless, so everything else on
+  // the dashboard still looks alive during a closure -- see the 2026-09-07
+  // Labor Day case this was built for.
+  const banner = document.getElementById('market-status-banner');
+  if (!status || status.is_open) {
+    banner.classList.add('hidden');
+    return;
+  }
+  const reopens = status.next_open
+    ? new Date(status.next_open).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : 'soon';
+  banner.textContent = `Stock market closed — reopens ${reopens}. Crypto keeps trading 24/7 regardless.`;
+  banner.classList.remove('hidden');
 }
 
 function renderResearchAgentDecisions(decisions) {
