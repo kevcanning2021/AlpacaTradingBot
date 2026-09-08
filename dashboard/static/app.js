@@ -72,6 +72,13 @@ function money(v) {
   return isNaN(n) ? v : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
+function pct(v) {
+  const n = parseFloat(v);
+  if (isNaN(n)) return '';
+  const asPct = n * 100;
+  return (asPct > 0 ? '+' : '') + asPct.toFixed(2) + '%';
+}
+
 async function refresh() {
   const banner = document.getElementById('offline-banner');
   try {
@@ -332,7 +339,7 @@ function renderPositions(positions) {
       <div class="item-top">
         <span class="item-title">${p.symbol}</span>
         <span class="item-sub">${p.qty} sh</span>
-        <span class="${pnlClass}">${money(p.unrealized_pl)}</span>
+        <span class="${pnlClass}">${money(p.unrealized_pl)} <span class="tag">${pct(p.unrealized_plpc)}</span></span>
       </div>
       <div class="item-meta">
         <span>Bought ${money(p.avg_entry_price)}</span>
