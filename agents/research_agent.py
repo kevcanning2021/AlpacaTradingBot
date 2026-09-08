@@ -84,6 +84,23 @@ MAX_ARTICLE_SYMBOLS = 3
 # outright there are more companies involved than got tagged.
 _OTHER_COMPANIES_PATTERN = re.compile(r'\band\s+\d+\s+other\b', re.IGNORECASE)
 
+# A third, different shape of the same underlying problem -- found live
+# 2026-09-08: a broad "the whole market" piece (a hedge fund manager's macro
+# outlook; a labor-market data release) vetoed QQQ, tagged with exactly
+# ['DIA', 'QQQ', 'SPY'] -- 3 symbols, at the MAX_ARTICLE_SYMBOLS boundary,
+# so the count filter didn't catch it, and there's no "and N other" text to
+# catch either. The tell here isn't count or phrasing, it's that every
+# tagged symbol is itself a broad market index fund, not an individual
+# company -- real macro/market-wide news routinely gets tagged with 2+ major
+# index ETFs together as a matter of course (that's what "the market" means
+# in a headline), which individual-company news essentially never does.
+# Index funds don't generate their own idiosyncratic corporate news the way
+# a company does, so this is a safe, generalizable signal, not a one-off
+# patch for this article. Limited to the tickers this fleet actually trades
+# (SPY/QQQ/IWM across Main/Sofi/Nova) plus DIA, which showed up tagged
+# alongside them in the real case -- extend if another shows up the same way.
+_INDEX_ETF_TICKERS = {'SPY', 'QQQ', 'IWM', 'DIA'}
+
 # Word-boundary-matched, not a plain substring check -- found live 2026-09-03:
 # 'sues' matched inside 'issues' ("Apple issues strong holiday guidance"), the
 # mirror-image false-positive of the MAX_ARTICLE_SYMBOLS bug above. Compiled
@@ -127,10 +144,13 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=No
     matched = []
     for article in articles:
         raw_text = f"{article.get('headline', '')} {article.get('summary', '')}"
-        if len(article.get('symbols', [])) > MAX_ARTICLE_SYMBOLS:
+        article_symbols = article.get('symbols', [])
+        if len(article_symbols) > MAX_ARTICLE_SYMBOLS:
             continue  # broad multi-company piece, not focused on this symbol -- see MAX_ARTICLE_SYMBOLS
         if _OTHER_COMPANIES_PATTERN.search(raw_text):
             continue  # headline says there are more companies than Alpaca tagged -- see _OTHER_COMPANIES_PATTERN
+        if sum(1 for s in article_symbols if s in _INDEX_ETF_TICKERS) >= 2:
+            continue  # tagged with 2+ broad index funds together -- market-wide news, not about this symbol specifically, see _INDEX_ETF_TICKERS
         text = raw_text.lower()
         for keyword, pattern in _KEYWORD_PATTERNS:
             if pattern.search(text):

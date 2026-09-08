@@ -98,6 +98,34 @@ class ResearchAgentTests(unittest.TestCase):
         result = research_agent.propose(SIGNAL, client=client)
         self.assertTrue(result['veto'])
 
+    def test_article_tagged_with_two_index_etfs_is_ignored(self):
+        """Real bug found live 2026-09-08: a broad market-wide macro piece
+        (a hedge fund manager's outlook) vetoed QQQ, tagged with exactly
+        ['DIA', 'QQQ', 'SPY'] -- 3 symbols, at the MAX_ARTICLE_SYMBOLS
+        boundary, no 'and N other' text either. The tell is that every
+        tagged symbol is itself a broad index fund, not a company."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="Investor Predicts One Final Rally Before a Historic Crash",
+            symbols=['DIA', 'QQQ', 'SPY'],
+        )]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'QQQ'}, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_article_tagged_with_only_one_index_etf_still_vetoes(self):
+        """Guards against the new check being so broad it swallows a
+        genuinely QQQ-specific story just because QQQ itself is an index
+        fund -- must still veto when only one index ETF is tagged (i.e. no
+        second index fund alongside it to signal 'broad market' commentary)."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline='QQQ halted amid a real trading halt event',
+            symbols=['QQQ', 'AAPL'],
+        )]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'QQQ'}, client=client)
+        self.assertTrue(result['veto'])
+
     def test_keyword_inside_a_longer_word_does_not_match(self):
         """Real bug found live 2026-09-03: 'sues' is a substring of 'issues',
         so a plain `in` check vetoed completely benign headlines like this
