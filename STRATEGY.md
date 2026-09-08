@@ -266,6 +266,41 @@ variant before considering real money:
   vs. baseline's +1.955%). This directly contradicts the "let winners run"
   thesis `SELL_RSI_MIN=80` was tuned for on 2026-07-16 — taking profit early
   is exactly what would have clipped the real MSFT trade (+23.9%) short.
+- **Hard take-profit exit (100% of position, not partial), re-tested
+  2026-09-08 against the current dual-signal engine** — prompted by a real
+  live case: AAPL ran to +$38 unrealized (peak $329.59) and gave it all
+  back to -$4 without the 8% trailing stop (which only engages 8% below the
+  *peak*, not 8% of the gain) ever coming close to protecting any of it.
+  The 2026-08-07 test above predates Bollinger entirely, so this was worth
+  re-checking on the actual current strategy/watchlist, not assumed from
+  stale data. Grid of +3%/+5%/+8%/+10%/+15% caps, full 460-day window, all
+  13 symbols: **every threshold underperformed the no-cap baseline
+  (+1.09%/trade, +187.5% total), monotonically** — +3% was worst
+  (+0.59%/trade, +105.1% total), +15% came closest but still trailed
+  (+1.00%/trade, +172.7% total). Same conclusion as 2026-08-07, now
+  confirmed under the current engine: capping gains clips real big winners
+  more than it protects against give-backs like AAPL's. **Not implemented.**
+- **Adaptive "profit-lock" trailing stop, tested 2026-09-08** — a different
+  lever than a hard cap: leave the entry stop/8% trail untouched below some
+  profit threshold, but *tighten* the trailing stop (not exit outright)
+  once peak's gain over entry crosses that threshold, to protect more of a
+  real gain like AAPL's without capping upside. Grid-searched activation
+  (2%/3%/5%/8% gain) × tightened trail (2%/3%/4%/5%/6%), 20 combinations,
+  **selected on the train half only**: every single combination
+  underperformed baseline on train — the "winner" (activate at 8% gain,
+  tighten to 6%) was the least-bad of an all-worse grid, not a real
+  in-sample improvement. Checked anyway per the full discipline: holdout
+  and an independent watchlist (Sofi's, never touched during selection)
+  both showed it marginally *ahead* of baseline, but the full 460-day
+  window — the most reliable slice — showed it **behind** baseline
+  (+1.02%/trade, +174.6% total vs. +1.09%/trade, +187.5%). Mixed-sign
+  results across slices for the same parameters is the signature of noise,
+  not a real effect. Leave-one-symbol-out stayed positive throughout
+  (+0.70% to +1.27%/trade), so this isn't fragile, it's just not better.
+  **Not implemented.** Third profit-protection idea rejected in a row
+  (partial profit-taking, hard take-profit, adaptive trailing) — the
+  current 8% trailing stop left alone now has three independent negative
+  results behind it, not just the original one.
 - **ATR-based (volatility-adaptive) stop-loss/trailing-stop**, replacing the
   fixed 5%/8% with a multiple of each symbol's own 14-day ATR. **Initially
   looked like a real win** (+2.36%/trade on holdout at a 2x/3x multiplier)
