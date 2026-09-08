@@ -168,8 +168,19 @@ same way to crypto and stocks.
 
 ## Rejected hypotheses — don't re-propose without new evidence
 
+**Correction added 2026-09-08**: everything below this line through the
+next `##` heading was inherited verbatim from Main's copy of this doc when
+Sofi was forked, and describes *Main's* watchlist history (AAPL, MSFT,
+GOOGL, AMZN, NVDA, SPY, QQQ and Main's own widening attempts), not Sofi's
+own (JPM, V, KO, WMT, AMD, COST, JNJ) — same class of mistake as the
+milestone tracker corrected 2026-09-04. Left in place as historical
+record of what was tested on Main's watchlist specifically, but don't read
+"the current 7" below as Sofi's own. Sofi's own, real watchlist decision is
+documented in "Watchlist: 7 → 15 symbols" further down.
+
 Tested 2026-07-16 against 300 real daily bars (~14 months), full
-watchlist, using the exact live scanner logic:
+watchlist, using the exact live scanner logic (Main's watchlist, see
+correction above):
 
 - **Wider watchlist** (TSLA, AMD, COIN, PLTR, MSTR — liquid, higher-beta
   candidates). 4 of 5 net negative; combined -0.778%/trade vs. the current
@@ -307,6 +318,58 @@ instead of protecting it. **Not implemented.** Would need re-testing if the
 watchlist ever changes (a future screen might land on symbols where this
 correlation doesn't hold), not a permanently-closed question the way the
 07-16/07-23 watchlist-widening attempts are.
+
+## Watchlist: 7 → 15 symbols (2026-09-08)
+
+**Real problem, not just a preference**: Sofi placed zero orders of any
+kind in the ~6 days since its dual-signal strategy went live (2026-09-02)
+— not zero closed trades, zero orders period. Backtest math explained why:
+99 trades / 460 days on the original 7 (JPM, V, KO, WMT, AMD, COST, JNJ) =
+one trade every ~4.6 days on average across the *whole* watchlist, so a
+multi-day silence isn't a bug, just a thin cadence for a dedicated bot.
+
+**First attempt, rejected**: a generic blue-chip/dividend candidate pool
+(PG, XOM, CVX, PFE, MRK, HD, LOW, MCD, PEP, T, VZ, BAC, GS, MS, UNH, ABBV,
+DIS, NKE, CSCO, IBM), selected by picking whichever looked positive over
+the *same* 460-day window being reported — the exact overfitting trap this
+doc's own "systematic 59-candidate screen" entry above already warns
+about. Caught before trusting it: re-run with proper discipline (select
+survivors on the training half only, judge on the untouched holdout half)
+showed the "winning" combo's genuine holdout expectancy (+0.82%/trade) was
+less than half the current 7's own holdout expectancy (+2.37%/trade) —
+HD and LOW both looked like train winners and were actually negative
+full-window, the same trap this project has hit before. **Not
+implemented.**
+
+**Second attempt, validated and implemented**: a deliberately different
+candidate character — higher-volatility tech/semiconductor/financial
+growth names (TXN, ADI, LRCX, AMAT, NFLX, UBER, AXP, SCHW), reasoned from
+AMD (a semiconductor growth name) being the single best performer in
+Sofi's own original 7, rather than more sleepy consumer-staples/pharma
+names. Same train-only-selection, holdout-only-judgment discipline:
+
+| | Trades (holdout) | Win % | Expectancy | Total |
+|---|---|---|---|---|
+| Original 7 | 45 | 64.4% | +2.37%/trade | +106.6% |
+| Widened 15 | 107 | 57.0% | +1.63%/trade | +174.1% |
+
+Lower per-trade edge but more than double the frequency, and genuinely
+*more* total return over the same holdout window because of it — not an
+illusion, confirmed three ways: every one of the 8 added symbols is
+individually profitable full-window (TXN +0.44%, ADI +1.86%, LRCX +5.04%,
+AMAT +3.16%, NFLX +0.72%, UBER +1.57%, AXP +0.17%, SCHW +1.16% per trade —
+no HD/LOW-style reversal hiding in the set); leave-one-symbol-out stayed
+in a tight +1.55%–+1.86%/trade band across all 15 exclusions (no single
+symbol propping up the result); and holdout (+1.63%/trade) tracked train
+(+1.87%/trade) closely rather than collapsing. **Implemented 2026-09-08**
+— `WATCHLIST` in `.env` now lists all 15 symbols. Full-window combined:
+214 trades, 60.7% win, +1.75%/trade, +373.8% total (vs. the original 7's
+99 trades, +177.6% total over the same window) — trades every ~2.1 days
+instead of ~4.6.
+
+`daily_fleet_audit.py`'s day-over-day drift detection will flag this exact
+change on its next run (2026-09-09) — expected and correct, not a bug;
+this is the deliberate, documented decision it's flagging.
 
 ## Automated monitoring: `strategy_check.py`
 
