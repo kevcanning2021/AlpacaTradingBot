@@ -57,6 +57,14 @@ class AlpacaClient:
         else:
             raise Exception(f"Failed to get account: {status} - {body}")
     
+    def get_clock(self) -> Dict:
+        """Get the market clock (is_open, next_open, next_close)."""
+        status, body = self._request('GET', '/clock')
+        if status == 200:
+            return json.loads(body)
+        else:
+            raise Exception(f"Failed to get clock: {status} - {body}")
+
     def get_positions(self) -> List[Dict]:
         """Get all open positions"""
         status, body = self._request('GET', '/positions')

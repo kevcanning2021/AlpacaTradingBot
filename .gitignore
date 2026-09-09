@@ -13,5 +13,6 @@ venv/
 *.bak
 position_method_state.json
 agent_decisions_state.json
+market_hours_state.json
 .claude/
 fleet_audit_log.json
