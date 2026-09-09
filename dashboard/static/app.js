@@ -287,10 +287,24 @@ function renderFleetAudit(entries) {
 }
 
 function renderSummary(s) {
+  // Today's P&L, same idea as each position's own P&L (money() + pct()
+  // next to it) -- equity vs. Alpaca's prior-trading-day closing equity.
+  // last_equity can be 0/missing on a brand new account; skip rather than
+  // show a bogus +Infinity%.
+  const equity = parseFloat(s.equity);
+  const lastEquity = parseFloat(s.last_equity);
+  let dayPnlHtml = '';
+  if (!isNaN(equity) && !isNaN(lastEquity) && lastEquity !== 0) {
+    const dayPnl = equity - lastEquity;
+    const dayPnlPct = dayPnl / lastEquity;
+    const pnlClass = dayPnl > 0 ? 'positive' : dayPnl < 0 ? 'negative' : '';
+    dayPnlHtml = ` <span class="${pnlClass}">${money(dayPnl)} <span class="tag">${pct(dayPnlPct)}</span></span>`;
+  }
+
   document.getElementById('summary-card').innerHTML = `
     <h2>Account</h2>
     <div class="summary-grid">
-      <div><span class="label">Total Value</span><span class="value">${money(s.equity)}</span></div>
+      <div><span class="label">Total Value</span><span class="value">${money(s.equity)}</span>${dayPnlHtml}</div>
       <div><span class="label">Cash</span><span class="value">${money(s.cash)}</span></div>
       <div><span class="label">Status</span><span class="value">${s.status || ''}</span></div>
     </div>`;

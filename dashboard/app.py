@@ -98,6 +98,10 @@ async def account_summary(request):
         'cash': data.get('cash'),
         'buying_power': data.get('buying_power'),
         'portfolio_value': data.get('portfolio_value'),
+        # last_equity is Alpaca's prior-trading-day closing equity -- lets the
+        # frontend show today's P&L next to Total Value the same way each
+        # open position already shows its own P&L (money() + pct()).
+        'last_equity': data.get('last_equity'),
         'status': data.get('status'),
         'trading_blocked': data.get('trading_blocked'),
     })
