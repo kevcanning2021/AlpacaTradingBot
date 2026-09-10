@@ -92,7 +92,7 @@ class ResearchAgentTests(unittest.TestCase):
         construction -- must still veto a genuinely focused article."""
         client = MagicMock()
         client.get_news.return_value = [_article(
-            headline='Company faces lawsuit from other former employees',
+            headline='Apple faces lawsuit from other former employees',
             symbols=['AAPL'],
         )]
         result = research_agent.propose(SIGNAL, client=client)
@@ -140,7 +140,7 @@ class ResearchAgentTests(unittest.TestCase):
         """Word-boundary matching must not become so strict it stops matching
         the real word -- 'sues' as an actual standalone word must still veto."""
         client = MagicMock()
-        client.get_news.return_value = [_article(headline='Regulator sues company over disclosure failures')]
+        client.get_news.return_value = [_article(headline='Regulator sues Apple over disclosure failures')]
         result = research_agent.propose(SIGNAL, client=client)
         self.assertTrue(result['veto'])
         self.assertIn('sues', result['risk_flags'])
@@ -150,7 +150,7 @@ class ResearchAgentTests(unittest.TestCase):
         article tagged with exactly the limit still counts as focused."""
         client = MagicMock()
         client.get_news.return_value = [_article(
-            headline='Company X sued by former partner',
+            headline='Apple sued by former partner',
             symbols=['AAPL', 'MSFT', 'GOOGL'][:research_agent.MAX_ARTICLE_SYMBOLS],
         )]
         result = research_agent.propose(SIGNAL, client=client)
@@ -169,7 +169,7 @@ class ResearchAgentTests(unittest.TestCase):
 
     def test_matching_is_case_insensitive(self):
         client = MagicMock()
-        client.get_news.return_value = [_article(headline='COMPANY FILES FOR BANKRUPTCY PROTECTION')]
+        client.get_news.return_value = [_article(headline='APPLE FILES FOR BANKRUPTCY PROTECTION')]
         result = research_agent.propose(SIGNAL, client=client)
         self.assertTrue(result['veto'])
         self.assertIn('bankruptcy', result['risk_flags'])
@@ -239,6 +239,46 @@ class ResearchAgentTests(unittest.TestCase):
         }
         self.assertNotIn(os.path.basename(AGENT_DECISIONS_FILE), trader_state_files)
         self.assertEqual(os.path.basename(AGENT_DECISIONS_FILE), 'agent_decisions_state.json')
+
+    def test_article_never_naming_the_tagged_company_is_ignored(self):
+        """Real bug found live on Nova 2026-09-10: an article tagged with a
+        SINGLE symbol (META) repeatedly vetoed a META entry on 'resignation'.
+        The real headline ("Bill Ackman Calls Anthropic Researcher's Exit
+        'Interesting' Amid Claims of 'Well-Funded PR Operation' Aimed at
+        Democrats") never mentions Meta/Facebook anywhere -- it's entirely
+        about an unrelated private company (Anthropic). Alpaca's own tag was
+        simply wrong, not broad, so MAX_ARTICLE_SYMBOLS/
+        _OTHER_COMPANIES_PATTERN/_INDEX_ETF_TICKERS (all built around tag
+        breadth) can't catch this. Ported to Main/Sofi even though META isn't
+        in their own watchlist -- the alias table and check are shared code,
+        and this exact failure shape could hit any aliased symbol here too."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="Bill Ackman Calls Anthropic Researcher's Exit 'Interesting' Amid Claims of 'Well-Funded PR Operation' Aimed at Democrats",
+            summary="Ackman reacted to allegations that Anthropic researcher Coxon's resignation was part of a coordinated PR push to build support.",
+            symbols=['META'],
+        )]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'META'}, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_article_naming_the_company_by_name_still_vetoes(self):
+        """Guards against the new check over-suppressing: a genuinely
+        META-specific red-flag article that names 'Meta' (not the bare
+        ticker) must still veto."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(headline='Meta hit with new antitrust lawsuit', symbols=['META'])]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'META'}, client=client)
+        self.assertTrue(result['veto'])
+
+    def test_symbol_without_a_known_alias_is_unaffected(self):
+        """ETFs/index funds (no entry in _COMPANY_NAME_ALIASES) must skip
+        this check entirely and fall back to plain keyword matching,
+        unchanged."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(headline='SPY halted amid a real trading halt event', symbols=['SPY'])]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'SPY'}, client=client)
+        self.assertTrue(result['veto'])
 
 
 if __name__ == '__main__':
