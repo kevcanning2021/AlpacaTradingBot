@@ -101,6 +101,49 @@ _OTHER_COMPANIES_PATTERN = re.compile(r'\band\s+\d+\s+other\b', re.IGNORECASE)
 # alongside them in the real case -- extend if another shows up the same way.
 _INDEX_ETF_TICKERS = {'SPY', 'QQQ', 'IWM', 'DIA'}
 
+# A fourth, structurally different shape -- found live on Nova 2026-09-10: an
+# article tagged with a SINGLE symbol (META) -- so none of the three checks
+# above even apply -- repeatedly vetoed META on 'resignation'. The article
+# ("Bill Ackman Calls Anthropic Researcher's Exit 'Interesting' Amid Claims
+# of...") never mentions Meta/Facebook anywhere in its headline or summary;
+# it's entirely about an unrelated private company (Anthropic) and a
+# researcher's exit. Alpaca's own tagging was simply wrong here, not broad --
+# the earlier three checks all assume the tag SET is the problem (too many,
+# undercounted, or all index funds); this one is a single bad tag. The
+# generalizable signal: if we know the company name(s) behind a symbol and
+# neither the symbol nor any of its names appears anywhere in the article's
+# own text, the tag is unreliable regardless of keyword or tag count.
+# Deliberately scoped to individual company stocks this fleet actually
+# trades (Main/Sofi/Nova's combined watchlists) -- ETFs/index funds/crypto
+# are left out on purpose: their headlines already use the bare ticker
+# routinely (a real GLD article says "GLD"), so there's no comparable
+# mistagging risk to guard against, and no reliable "name" to check anyway.
+_COMPANY_NAME_ALIASES = {
+    'AAPL': ['apple'],
+    'AMZN': ['amazon'],
+    'GOOGL': ['google', 'alphabet'],
+    'GOOG': ['google', 'alphabet'],
+    'MSFT': ['microsoft'],
+    'NVDA': ['nvidia'],
+    'TSLA': ['tesla'],
+    'META': ['meta', 'facebook'],
+    'ADI': ['analog devices'],
+    'AMAT': ['applied materials'],
+    'AMD': ['advanced micro devices'],
+    'AXP': ['american express'],
+    'COST': ['costco'],
+    'JNJ': ['johnson & johnson', 'johnson and johnson'],
+    'JPM': ['jpmorgan', 'jp morgan', 'j.p. morgan'],
+    'KO': ['coca-cola', 'coca cola'],
+    'LRCX': ['lam research'],
+    'NFLX': ['netflix'],
+    'SCHW': ['charles schwab', 'schwab'],
+    'TXN': ['texas instruments'],
+    'UBER': ['uber'],
+    'V': ['visa'],
+    'WMT': ['walmart'],
+}
+
 # Word-boundary-matched, not a plain substring check -- found live 2026-09-03:
 # 'sues' matched inside 'issues' ("Apple issues strong holiday guidance"), the
 # mirror-image false-positive of the MAX_ARTICLE_SYMBOLS bug above. Compiled
@@ -151,6 +194,11 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=No
             continue  # headline says there are more companies than Alpaca tagged -- see _OTHER_COMPANIES_PATTERN
         if sum(1 for s in article_symbols if s in _INDEX_ETF_TICKERS) >= 2:
             continue  # tagged with 2+ broad index funds together -- market-wide news, not about this symbol specifically, see _INDEX_ETF_TICKERS
+        aliases = _COMPANY_NAME_ALIASES.get(symbol)
+        if aliases is not None:
+            names = aliases + [symbol]
+            if not any(re.search(r'\b' + re.escape(name) + r'\b', raw_text, re.IGNORECASE) for name in names):
+                continue  # tagged to this symbol but never actually names it -- see _COMPANY_NAME_ALIASES
         text = raw_text.lower()
         for keyword, pattern in _KEYWORD_PATTERNS:
             if pattern.search(text):
