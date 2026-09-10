@@ -127,3 +127,21 @@ gets them, not just whoever's driving a particular session.
     can't distinguish "about to test the new logic" from "structurally
     can't reach it yet" — check the actual gating state, not just the
     metric the gate nominally responds to.
+
+21. **A committed, pushed, and even live-verified fix isn't actually live
+    until the long-running service that imports it is restarted.** Main and
+    Nova's trading processes (`run_server.py`/`run_paper_bot.py`) import
+    `research_agent.py` once at startup and hold that module in memory for
+    the process's lifetime. Several real research-agent fixes made across a
+    week sat correctly on disk, and each one was even confirmed correct by
+    running it in a fresh one-off script — but the actual live bots kept
+    using the old, buggy version underneath, because each had been running
+    since before the fix and Python never re-imports an already-loaded
+    module. Nova kept re-vetoing the same false-positive article for hours
+    with the "fixed" code sitting unused the whole time. Cron-invoked
+    scripts (`watchdog.py`, `daily_fleet_audit.py`) don't have this problem
+    — cron spawns a fresh process every run, so they always pick up current
+    code automatically. After deploying to anything a persistent service
+    imports, `systemctl restart` and confirming the new uptime is a
+    mandatory last step, not an optional one — "verified in isolation" is
+    not the same claim as "the running process is using it."
