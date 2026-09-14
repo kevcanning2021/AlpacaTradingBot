@@ -145,3 +145,18 @@ gets them, not just whoever's driving a particular session.
     imports, `systemctl restart` and confirming the new uptime is a
     mandatory last step, not an optional one — "verified in isolation" is
     not the same claim as "the running process is using it."
+
+22. **A derived/summary metric answers exactly the question it was built
+    for, not the nearby question it sounds like it answers — check live
+    ground truth before restating it as a broader claim.** `daily_fleet_
+    audit.py`'s `forward_test.closed_trades` counts only round-trip
+    (opened-and-closed) trades. Sofi's audit correctly showed `closed_
+    trades: 0` for four straight days after the watchlist widening, which
+    got reported as "hasn't traded" — but it had actually opened two real
+    positions (COST, UBER) on day one; they just hadn't closed yet. This is
+    the exact same distinction ("zero closed trades" vs. "zero orders of
+    any kind") already learned once during the original drought
+    investigation that led to the widening in the first place — relearned
+    the hard way because a multi-day pattern matching a prior expectation
+    ("this looks like the drought again") got restated from a summary
+    number instead of re-verified against actual open positions.
