@@ -319,6 +319,39 @@ watchlist ever changes (a future screen might land on symbols where this
 correlation doesn't hold), not a permanently-closed question the way the
 07-16/07-23 watchlist-widening attempts are.
 
+**Sofi-specific: manually-triggered 5m/15m/1h "intraday" strategy**, tested
+2026-09-16, requested to give Sofi a faster, on-demand alternative to its
+slow daily-bar cadence (separate from the watchlist widening above, which
+addressed frequency on the *existing* daily strategy). Entry rule required
+all three timeframes to agree at once: 1h EMA9>EMA21 trend filter, 15m
+Bollinger(20,2) lower-band bounce + oversold RSI (identical logic to the
+daily-bar dual-signal setup, just faster), 5m EMA9/21 cross as the entry
+trigger. Backtested against ~6 months of real 5m/15m/1h bars (the IEX free
+feed's actual retention limit for 5-minute data) across the current
+15-symbol watchlist, stop_pct selected from a 4-candidate grid ({0.3%,
+0.5%, 0.8%, 1.0%} of entry, 1.5R target) on TRAIN data only, checked against
+HOLDOUT exactly once (see `intraday_backtest.py`).
+
+**Rejected — not enough trades to mean anything, not a negative-expectancy
+result.** The three-timeframe conjunction is so restrictive it produced
+only 13-14 trades total across all 15 symbols over the entire ~6-month
+window — fewer trades in absolute count than the existing daily-bar
+strategy manages in the same span, despite running on far faster bars.
+Train (n=6) showed +1.404%/trade at 83.3% win — looked great — and
+collapsed on holdout (n=7) to +0.139%/trade at 42.9% win, with the
+per-symbol breakdown showing 3 winners and 4 losers roughly canceling out.
+That's not "the strategy has weak edge," it's "there is no usable sample
+here to draw any conclusion from" — 7 trades is coin-flip territory. Did
+not proceed to building the live session runner or dashboard trigger this
+was intended to feed (per the approved plan, Phase 3/4 were explicitly
+gated on this backtest showing real signal, not just a nominally-positive
+number). **Don't re-propose a fixed 3-of-3-timeframe-agreement rule for an
+intraday strategy on this watchlist without either loosening it (e.g.
+2-of-3 timeframes, or drop the 1h filter entirely) or pulling in a
+materially larger/longer intraday dataset than the free feed allows** —
+the conjunction itself, not any individual timeframe's logic, is what
+starves this of samples.
+
 ## Watchlist: 7 → 15 symbols (2026-09-08)
 
 **Real problem, not just a preference**: Sofi placed zero orders of any

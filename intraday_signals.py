@@ -11,10 +11,16 @@ Reuses _compute_ema/_compute_rsi/_compute_bollinger from scanner.py
 directly -- confirmed pure list-of-floats math with zero calendar/timeframe
 assumptions, so the same functions that already validate to a real,
 positive backtest on daily bars are safe to reuse here unchanged. What's
-new is only how they're combined across three timeframes; the exit rule
-(stop/target) is deliberately NOT decided here -- Phase 2's backtest
-selects it from data, not guesswork (see LESSONS.md entry 17: picking the
-best-looking variant against holdout is itself overfitting).
+new is only how they're combined across three timeframes.
+
+check_exit()'s stop_pct is deliberately a parameter, not a hardcoded
+constant -- Phase 2's backtest selects its value from TRAIN data only (a
+small candidate set, exactly one chosen configuration then checked against
+HOLDOUT once), never guessed and never picked by whichever candidate looks
+best on holdout (see LESSONS.md entry 17: that's itself overfitting). Once
+chosen, the SAME check_exit() call (with the winning stop_pct) is reused
+unchanged by the live session runner, so backtest and live can't drift
+apart on exit logic.
 """
 from dataclasses import dataclass
 from typing import List, Optional
@@ -94,3 +100,19 @@ def evaluate(symbol: str, closes_1h: List[float], closes_15m: List[float],
         symbol=symbol, price=closes_5m[-1],
         reason="1h uptrend + 15m Bollinger bounce + 5m EMA9/21 cross",
     )
+
+
+def check_exit(entry_price: float, current_price: float, stop_pct: float, target_r: float = 1.5) -> Optional[str]:
+    """Fixed percentage stop/target relative to entry -- returns 'stop',
+    'target', or None if neither level has been hit yet. target_r is the
+    reward:risk ratio applied to stop_pct (e.g. stop_pct=0.005, target_r=1.5
+    means a stop 0.5% below entry and a target 0.75% above). Deliberately
+    simple (no ATR/volatility scaling) for this strategy's first pass --
+    stop_pct itself is what Phase 2's backtest selects from data."""
+    stop_price = entry_price * (1 - stop_pct)
+    target_price = entry_price * (1 + stop_pct * target_r)
+    if current_price <= stop_price:
+        return 'stop'
+    if current_price >= target_price:
+        return 'target'
+    return None

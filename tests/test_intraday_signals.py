@@ -105,5 +105,26 @@ class EvaluateTests(unittest.TestCase):
         self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], []))
 
 
+class CheckExitTests(unittest.TestCase):
+    def test_neither_level_hit_returns_none(self):
+        self.assertIsNone(sig.check_exit(entry_price=100.0, current_price=100.2, stop_pct=0.005))
+
+    def test_stop_hit_returns_stop(self):
+        # stop_pct=0.005 -> stop at 99.50
+        self.assertEqual(sig.check_exit(entry_price=100.0, current_price=99.0, stop_pct=0.005), 'stop')
+
+    def test_target_hit_returns_target(self):
+        # stop_pct=0.005, target_r=1.5 -> target at 100.75
+        self.assertEqual(sig.check_exit(entry_price=100.0, current_price=101.0, stop_pct=0.005, target_r=1.5), 'target')
+
+    def test_exactly_at_stop_price_counts_as_stop(self):
+        """Boundary: <= stop_price, not strictly less than -- must not let a
+        trade sit at exactly the stop level and never close."""
+        self.assertEqual(sig.check_exit(entry_price=100.0, current_price=99.5, stop_pct=0.005), 'stop')
+
+    def test_exactly_at_target_price_counts_as_target(self):
+        self.assertEqual(sig.check_exit(entry_price=100.0, current_price=100.75, stop_pct=0.005, target_r=1.5), 'target')
+
+
 if __name__ == '__main__':
     unittest.main()
