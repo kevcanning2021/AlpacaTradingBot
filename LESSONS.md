@@ -194,3 +194,24 @@ gets them, not just whoever's driving a particular session.
     honest outcomes (inconclusive / pass / clear negative) rather than
     being rationalized after the fact. Decide the bar while you still
     don't know which side of it you'll land on.
+
+25. **If you are optimising for X, don't select your parameter on Y — the
+    selection will quietly pick the variant that least serves your actual
+    goal.** A Donchian breakout was added as a third entry signal on Main
+    for one reason: **more trades**. Its period N was then selected the
+    way every other parameter in this project gets selected — best
+    expectancy on train. Across N=10/20/40/55 the relationship was cleanly
+    monotonic: shorter N added far more trades and scored worse on
+    expectancy (N=10: +224 trades, +0.616%/trade train; N=55: +86 trades,
+    +1.928%). So "best train expectancy" mechanically chose **N=55, the
+    variant that added the fewest trades** — optimising against the very
+    thing the change existed to deliver. The pre-registered "+50% trade
+    count" criterion then failed at 1.49x, missing by a hair, *because of
+    the selection rule*. The habit of always selecting on expectancy is
+    usually right and was wrong here: when the objective is frequency
+    subject to an expectancy floor, select the **most trades among
+    variants clearing the floor**, not the best expectancy outright.
+    (Caveat worth keeping: fixing the selection would not have rescued
+    this particular test — holdout expectancy failed independently, with
+    Donchian's own holdout trades running **negative** at -0.434%/trade
+    across n=74. The methodological point stands on its own regardless.)
