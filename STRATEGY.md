@@ -377,6 +377,35 @@ alongside milestone 1 below once more accumulate. Sofi runs the identical
 code/flag; Nova doesn't share this codebase (different multi-timeframe
 strategy) and wasn't touched.
 
+**Third signal family: Donchian breakout — tested 2026-09-16, rejected.**
+Motivated by the observation that Main trades ~0.8x/week (on spec vs. its
+own backtest's ~0.95, so not broken, just inherently slow) and that *every*
+previous frequency attempt loosened or widened the EXISTING signals and
+failed — while the one change that worked was adding an independent signal
+family (EMA-only → EMA+Bollinger: 44 → 90 trades AND expectancy up). This
+pulled that same lever a second time with a genuinely orthogonal premise:
+Bollinger bets on reversion TO the mean, EMA on trend continuation,
+breakout on momentum THROUGH resistance. Closes-based Donchian, no RSI gate
+(a breakout is overbought by construction — gating it on RSI<65 would
+reject nearly every one and test nothing), evaluated last so the incumbents
+kept first refusal and every added trade was strictly incremental. Period N
+selected on TRAIN only from {10, 20, 40, 55}; pass/fail pre-registered
+before the run (≥+50% trades AND holdout expectancy not below baseline).
+
+**Failed both criteria.** Baseline: 174 trades, holdout +0.983%/trade.
+Chosen N=55: 260 trades (1.49x — missed the +50% bar by a hair), holdout
+collapsed to **+0.380%/trade**. The decisive number is Donchian's own
+holdout contribution: **n=74 at -0.434%/trade, actively negative**, against
++1.928% train for the combined set — a textbook train/holdout collapse. The
+N-sweep also showed a clean monotonic frequency/quality trade-off (N=10:
++224 trades at +0.616% train; N=55: +86 trades at +1.928%), meaning
+breakout entries diluted expectancy at *every* period tested, not just the
+chosen one. **Don't re-propose breakout/momentum entries for this watchlist
+without new evidence** — on 13 large-cap/index symbols the premise itself
+appears not to hold, and the dilution was broad rather than one bad N.
+See `donchian_backtest.py` (kept, it's a reusable harness) and LESSONS.md
+entry 25 for the selection-criterion mistake this run also exposed.
+
 ## Watchlist: 7 → 13 symbols (retroactively documented 2026-09-06)
 
 **This section exists to close a real process gap, not just record a
