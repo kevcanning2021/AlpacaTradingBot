@@ -38,6 +38,15 @@ BOLLINGER_PERIOD = 20
 BOLLINGER_STD = 2
 BOLLINGER_OVERSOLD_RSI = 40
 
+# How long a 15m setup stays "armed" for a 5m entry trigger, in 5-minute
+# bars. 12 = one hour, chosen on reasoning alone (roughly how long a 15m
+# mean-reversion setup stays relevant -- 4 fifteen-minute bars) and
+# deliberately NOT grid-searched against backtest results: tuning this
+# against the same holdout the rule is judged on is the overfitting trap
+# LESSONS.md entry 17 describes. If it ever is tuned, it needs its own
+# train-only selection like stop_pct gets.
+ARMED_WINDOW_5M_BARS = 12
+
 
 @dataclass(frozen=True)
 class IntradaySignal:
@@ -84,29 +93,30 @@ def entry_trigger_5m(closes_5m: List[float]) -> bool:
     return prev_diff < 0 and curr_diff > 0
 
 
-def evaluate(symbol: str, closes_1h: List[float], closes_15m: List[float],
-             closes_5m: List[float]) -> Optional[IntradaySignal]:
-    """A real entry when the 15m setup and 5m entry trigger both align.
+def evaluate(symbol: str, closes_5m: List[float], setup_active: bool) -> Optional[IntradaySignal]:
+    """A real entry when the 5m trigger fires WHILE a recent 15m setup is
+    still armed. `setup_active` is supplied by the caller, which owns the
+    arming state (see ARMED_WINDOW_5M_BARS) -- this function stays pure.
 
-    closes_1h is still accepted (so callers/the backtest don't need to
-    change their call site) but is no longer required to confirm an
-    uptrend. The original 3-timeframe conjunction (1h trend + 15m setup +
-    5m entry) was tested 2026-09-16 and rejected: it was so restrictive it
-    produced only 13-14 trades total across the whole watchlist over ~6
-    months -- too few to draw any conclusion from either way (see
-    STRATEGY.md's rejected-hypotheses section). Dropping the 1h filter is
-    the deliberate next step from that finding, not a fresh guess.
-    trend_filter_1h itself stays defined and tested below in case a looser
-    version of it is worth reintroducing later."""
+    Why the caller owns arming rather than this function re-deriving it:
+    the two earlier versions (3-timeframe, then 2-timeframe) both required
+    the 15m setup and the 5m crossover to be true on the SAME 5-minute
+    bar. Both are discrete, ~single-bar events, so demanding they coincide
+    exactly is multiplicatively rare -- that mechanism, not any threshold,
+    is what produced only 13-20 trades over ~6 months in both rejected
+    attempts (see STRATEGY.md). A real trader watching a 15m setup form
+    then waiting for a 5m entry over the following bars is the behaviour
+    this models, and it needs state across bars, which a pure signal
+    function shouldn't hold."""
     if not closes_5m:
         return None
-    if not setup_15m(closes_15m):
+    if not setup_active:
         return None
     if not entry_trigger_5m(closes_5m):
         return None
     return IntradaySignal(
         symbol=symbol, price=closes_5m[-1],
-        reason="15m Bollinger bounce + 5m EMA9/21 cross",
+        reason="5m EMA9/21 cross within an armed 15m Bollinger setup",
     )
 
 

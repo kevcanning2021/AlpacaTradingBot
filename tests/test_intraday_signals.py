@@ -70,44 +70,43 @@ class EntryTrigger5mTests(unittest.TestCase):
 
 
 class EvaluateTests(unittest.TestCase):
-    """evaluate() combines the 15m setup and 5m trigger -- mock each
-    sub-function directly rather than re-deriving real price series for
-    every combination. The 1h trend filter was dropped 2026-09-16 (see
-    evaluate()'s own docstring) -- these tests confirm it's no longer
-    consulted at all, not just that a failing 1h reading is tolerated."""
+    """evaluate() now takes the arming state as a parameter rather than
+    re-deriving the 15m setup itself -- the caller owns that state (see
+    ARMED_WINDOW_5M_BARS). These tests cover the pure part: given an
+    armed/unarmed setup and a 5m trigger, does a signal fire."""
 
-    def test_signal_when_15m_and_5m_align(self):
-        with patch('intraday_signals.setup_15m', return_value=True), \
-             patch('intraday_signals.entry_trigger_5m', return_value=True):
-            result = sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0])
+    def test_signal_when_armed_and_5m_trigger_fires(self):
+        with patch('intraday_signals.entry_trigger_5m', return_value=True):
+            result = sig.evaluate('AAPL', [100.0, 101.0], setup_active=True)
         self.assertIsNotNone(result)
         self.assertEqual(result.symbol, 'AAPL')
         self.assertEqual(result.price, 101.0)
 
-    def test_closes_1h_is_accepted_but_ignored(self):
-        """Regression guard for the 2026-09-16 change: an empty/garbage
-        closes_1h must not block a signal now that trend_filter_1h is no
-        longer called from evaluate()."""
-        with patch('intraday_signals.trend_filter_1h') as mock_trend, \
-             patch('intraday_signals.setup_15m', return_value=True), \
-             patch('intraday_signals.entry_trigger_5m', return_value=True):
-            result = sig.evaluate('AAPL', [], [1.0], [100.0, 101.0])
-        self.assertIsNotNone(result)
-        mock_trend.assert_not_called()
+    def test_no_signal_when_not_armed(self):
+        """The 5m trigger alone is not enough -- a recent 15m setup must
+        have armed the symbol first."""
+        with patch('intraday_signals.entry_trigger_5m', return_value=True):
+            self.assertIsNone(sig.evaluate('AAPL', [100.0, 101.0], setup_active=False))
 
-    def test_no_signal_when_15m_setup_fails(self):
-        with patch('intraday_signals.setup_15m', return_value=False), \
-             patch('intraday_signals.entry_trigger_5m', return_value=True):
-            self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0]))
-
-    def test_no_signal_when_5m_trigger_fails(self):
-        with patch('intraday_signals.setup_15m', return_value=True), \
-             patch('intraday_signals.entry_trigger_5m', return_value=False):
-            self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0]))
+    def test_no_signal_when_armed_but_no_5m_trigger(self):
+        """Being armed is not itself an entry -- the 5m trigger still has
+        to fire within the window."""
+        with patch('intraday_signals.entry_trigger_5m', return_value=False):
+            self.assertIsNone(sig.evaluate('AAPL', [100.0, 101.0], setup_active=True))
 
     def test_no_signal_with_no_5m_bars_at_all(self):
         """Guards against calling any sub-function on an empty bar list."""
-        self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], []))
+        self.assertIsNone(sig.evaluate('AAPL', [], setup_active=True))
+
+    def test_setup_15m_is_not_called_by_evaluate(self):
+        """Regression guard: arming is the caller's job now. If evaluate()
+        ever re-derives the setup itself, the armed window silently stops
+        working (it'd collapse back to same-bar coincidence, the exact
+        thing that produced the two rejected attempts)."""
+        with patch('intraday_signals.setup_15m') as mock_setup, \
+             patch('intraday_signals.entry_trigger_5m', return_value=True):
+            sig.evaluate('AAPL', [100.0, 101.0], setup_active=True)
+        mock_setup.assert_not_called()
 
 
 class CheckExitTests(unittest.TestCase):

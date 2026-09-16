@@ -362,12 +362,48 @@ bars (the IEX free feed's actual limit) is not enough raw material for any
 entry rule this selective on 15 symbols, regardless of exact shape.**
 Did not proceed to building the live session runner or dashboard trigger
 either attempt was intended to feed (Phase 3/4 were explicitly gated on
-real signal, not a nominally-positive number). **Don't re-propose another
-loosened variant against this same dataset** -- the fix, if there is one,
-is a materially larger/longer intraday dataset (a paid data plan) or a
-fundamentally less selective signal design accepting more, individually
-weaker setups to get a workable sample size -- not another tweak to this
-one.
+real signal, not a nominally-positive number).
+
+**Third and final attempt, same day — armed-window redesign. This one got
+a real answer: no edge.** The diagnosis behind the first two failures was
+mechanical, not statistical: `setup_15m` (a two-bar Bollinger bounce) and
+`entry_trigger_5m` (a one-bar EMA cross) are both discrete, roughly
+single-bar events, and the code demanded they be true on the *same*
+5-minute bar. Requiring two rare instantaneous events to coincide exactly
+is multiplicatively rare — no discretionary trader works that way; they
+see a 15m setup form, then watch the 5m for an entry over the following
+bars. Rebuilt to match that: a 15m setup *arms* the symbol for
+`ARMED_WINDOW_5M_BARS` (12 = one hour), and any 5m trigger inside that
+window takes the trade. The window length was chosen on reasoning alone
+and deliberately **not** grid-searched against results.
+
+**A pass/fail criterion was pre-registered before the run**: holdout
+n >= 50, because the first two attempts both "passed" a naive
+expectancy>0 check on n=7 and n=10 and still meant nothing. Result:
+
+- Trades: 13-20 → **281-296** (the mechanical fix worked exactly as
+  diagnosed, ~15x more trades — sample size was never a data problem after
+  all, it was a rule-structure problem)
+- TRAIN (n=140): +0.286%/trade, 50.7% win
+- HOLDOUT (n=141): **-0.172%/trade, 37.6% win**
+- Per-symbol holdout: **9 of 12 symbols negative** — broad-based, not one
+  bad symbol dragging an otherwise-fine result down
+
+At a 1.5R target the break-even win rate is 40% (1.5w = 1-w → w = 0.4).
+Holdout came in at 37.6%, just under it — exactly what an entry signal
+with *no predictive edge* looks like once the train-period selection
+effect washes out. **This is a successful test with a negative result, not
+an inconclusive one.** The 15m-Bollinger-mean-reversion + 5m-EMA-trigger
+family has no edge on this watchlist at intraday timeframes, and that's
+now established on a real sample rather than guessed at.
+
+**Don't re-propose this signal family for intraday use.** The earlier note
+about needing a paid data plan turned out to be wrong and is retracted:
+6 months of 5-minute bars is plenty of data once the entry rule isn't
+structurally self-starving. Any future intraday attempt should use a
+genuinely different signal basis (not Bollinger mean-reversion + EMA
+crossover), and should keep the pre-registered-sample-size discipline
+that made this run actually decidable.
 
 ## Watchlist: 7 → 15 symbols (2026-09-08)
 
