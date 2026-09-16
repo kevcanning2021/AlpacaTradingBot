@@ -160,3 +160,37 @@ gets them, not just whoever's driving a particular session.
     the hard way because a multi-day pattern matching a prior expectation
     ("this looks like the drought again") got restated from a summary
     number instead of re-verified against actual open positions.
+
+23. **Before concluding "not enough data," check whether the rule is
+    structurally self-starving — a conjunction of near-instantaneous
+    events is multiplicatively rare, and that looks identical to a data
+    shortage.** An intraday strategy produced only 13-20 trades over ~6
+    months across 15 symbols, twice. Both times the conclusion drawn was
+    "the IEX free feed's ~6-month 5-minute history isn't enough raw
+    material" — and STRATEGY.md briefly carried a confident
+    recommendation to buy a paid data plan. That was wrong. The real
+    cause was mechanical: the entry required a 15m Bollinger bounce (a
+    two-bar event) and a 5m EMA cross (a one-bar event) to be true on the
+    *same* 5-minute bar. Two rare instantaneous events demanded to
+    coincide exactly is their probabilities multiplied. Restructuring so
+    the 15m setup *arms* a one-hour window for the 5m trigger — which is
+    what a discretionary trader actually does — produced **281-296 trades
+    from the exact same dataset**, ~15x more, and finally made the
+    strategy decidable (it had no edge, which is a real answer). The
+    diagnostic question to ask first: *how many bars is each condition
+    true for, and am I requiring them to overlap?* Sample starvation is a
+    rule-design bug far more often than a data-availability one, and the
+    fix is free while the misdiagnosis costs money.
+
+24. **Pre-register what counts as a conclusive result before running the
+    test, not after seeing the numbers.** The same backtest harness
+    initially passed anything with `holdout expectancy > 0 and n >= 5`.
+    Two separate attempts cleared that bar on n=7 and n=10 and were
+    reported as "positive" when both were statistically meaningless — at
+    that size a positive expectancy is indistinguishable from a coin
+    flip, so the threshold let a non-answer masquerade as a pass. Raising
+    it to n >= 50 *before* the third run, and stating the criterion out
+    loud first, meant the result could only come back as one of three
+    honest outcomes (inconclusive / pass / clear negative) rather than
+    being rationalized after the fact. Decide the bar while you still
+    don't know which side of it you'll land on.
