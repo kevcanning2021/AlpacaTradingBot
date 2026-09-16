@@ -70,33 +70,38 @@ class EntryTrigger5mTests(unittest.TestCase):
 
 
 class EvaluateTests(unittest.TestCase):
-    """evaluate() combines all three -- mock each sub-function directly
-    rather than re-deriving real price series for every combination."""
+    """evaluate() combines the 15m setup and 5m trigger -- mock each
+    sub-function directly rather than re-deriving real price series for
+    every combination. The 1h trend filter was dropped 2026-09-16 (see
+    evaluate()'s own docstring) -- these tests confirm it's no longer
+    consulted at all, not just that a failing 1h reading is tolerated."""
 
-    def test_signal_only_when_all_three_align(self):
-        with patch('intraday_signals.trend_filter_1h', return_value=True), \
-             patch('intraday_signals.setup_15m', return_value=True), \
+    def test_signal_when_15m_and_5m_align(self):
+        with patch('intraday_signals.setup_15m', return_value=True), \
              patch('intraday_signals.entry_trigger_5m', return_value=True):
             result = sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0])
         self.assertIsNotNone(result)
         self.assertEqual(result.symbol, 'AAPL')
         self.assertEqual(result.price, 101.0)
 
-    def test_no_signal_when_1h_trend_fails(self):
-        with patch('intraday_signals.trend_filter_1h', return_value=False), \
+    def test_closes_1h_is_accepted_but_ignored(self):
+        """Regression guard for the 2026-09-16 change: an empty/garbage
+        closes_1h must not block a signal now that trend_filter_1h is no
+        longer called from evaluate()."""
+        with patch('intraday_signals.trend_filter_1h') as mock_trend, \
              patch('intraday_signals.setup_15m', return_value=True), \
              patch('intraday_signals.entry_trigger_5m', return_value=True):
-            self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0]))
+            result = sig.evaluate('AAPL', [], [1.0], [100.0, 101.0])
+        self.assertIsNotNone(result)
+        mock_trend.assert_not_called()
 
     def test_no_signal_when_15m_setup_fails(self):
-        with patch('intraday_signals.trend_filter_1h', return_value=True), \
-             patch('intraday_signals.setup_15m', return_value=False), \
+        with patch('intraday_signals.setup_15m', return_value=False), \
              patch('intraday_signals.entry_trigger_5m', return_value=True):
             self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0]))
 
     def test_no_signal_when_5m_trigger_fails(self):
-        with patch('intraday_signals.trend_filter_1h', return_value=True), \
-             patch('intraday_signals.setup_15m', return_value=True), \
+        with patch('intraday_signals.setup_15m', return_value=True), \
              patch('intraday_signals.entry_trigger_5m', return_value=False):
             self.assertIsNone(sig.evaluate('AAPL', [1.0], [1.0], [100.0, 101.0]))
 

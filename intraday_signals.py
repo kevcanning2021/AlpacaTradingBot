@@ -1,6 +1,9 @@
 """Pure multi-timeframe signal logic for the Sofi Intraday strategy (Phase 1
-of the approved plan) -- a 1h trend filter, a 15m Bollinger setup, and a 5m
-EMA entry trigger. No I/O, no ordering, no state: just functions over lists
+of the approved plan) -- a 15m Bollinger setup and a 5m EMA entry trigger
+(originally a 3-timeframe conjunction including a 1h trend filter; dropped
+2026-09-16 after backtesting showed the 3-way conjunction was too
+restrictive to produce a usable sample -- see evaluate()'s own docstring
+and STRATEGY.md). No I/O, no ordering, no state: just functions over lists
 of floats, so they can be unit-tested without any network/mock scaffolding
 and reused identically by both the backtest (Phase 2) and the live session
 runner (Phase 3) -- the same shape run against historical vs. live bars
@@ -83,14 +86,19 @@ def entry_trigger_5m(closes_5m: List[float]) -> bool:
 
 def evaluate(symbol: str, closes_1h: List[float], closes_15m: List[float],
              closes_5m: List[float]) -> Optional[IntradaySignal]:
-    """A real entry only when all three timeframes align: 1h says the
-    regime is up, 15m says a real oversold bounce just set up, and 5m says
-    momentum has actually turned right now. Any one missing -> no signal,
-    deliberately conservative since this strategy starts unvalidated (see
-    the Sofi Intraday plan's Phase 2 backtest gate)."""
+    """A real entry when the 15m setup and 5m entry trigger both align.
+
+    closes_1h is still accepted (so callers/the backtest don't need to
+    change their call site) but is no longer required to confirm an
+    uptrend. The original 3-timeframe conjunction (1h trend + 15m setup +
+    5m entry) was tested 2026-09-16 and rejected: it was so restrictive it
+    produced only 13-14 trades total across the whole watchlist over ~6
+    months -- too few to draw any conclusion from either way (see
+    STRATEGY.md's rejected-hypotheses section). Dropping the 1h filter is
+    the deliberate next step from that finding, not a fresh guess.
+    trend_filter_1h itself stays defined and tested below in case a looser
+    version of it is worth reintroducing later."""
     if not closes_5m:
-        return None
-    if not trend_filter_1h(closes_1h):
         return None
     if not setup_15m(closes_15m):
         return None
@@ -98,7 +106,7 @@ def evaluate(symbol: str, closes_1h: List[float], closes_15m: List[float],
         return None
     return IntradaySignal(
         symbol=symbol, price=closes_5m[-1],
-        reason="1h uptrend + 15m Bollinger bounce + 5m EMA9/21 cross",
+        reason="15m Bollinger bounce + 5m EMA9/21 cross",
     )
 
 

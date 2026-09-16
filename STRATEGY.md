@@ -341,16 +341,33 @@ Train (n=6) showed +1.404%/trade at 83.3% win — looked great — and
 collapsed on holdout (n=7) to +0.139%/trade at 42.9% win, with the
 per-symbol breakdown showing 3 winners and 4 losers roughly canceling out.
 That's not "the strategy has weak edge," it's "there is no usable sample
-here to draw any conclusion from" — 7 trades is coin-flip territory. Did
-not proceed to building the live session runner or dashboard trigger this
-was intended to feed (per the approved plan, Phase 3/4 were explicitly
-gated on this backtest showing real signal, not just a nominally-positive
-number). **Don't re-propose a fixed 3-of-3-timeframe-agreement rule for an
-intraday strategy on this watchlist without either loosening it (e.g.
-2-of-3 timeframes, or drop the 1h filter entirely) or pulling in a
-materially larger/longer intraday dataset than the free feed allows** —
-the conjunction itself, not any individual timeframe's logic, is what
-starves this of samples.
+here to draw any conclusion from" — 7 trades is coin-flip territory.
+
+**Follow-up attempt, same day**: dropped the 1h trend filter entirely
+(2-of-3 -> 15m setup + 5m entry only), re-ran the identical backtest.
+Total trades rose modestly (13-14 -> 19-20), but train (n=9, +1.152%/trade,
+77.8% win) still collapsed on holdout (n=10, +0.094%/trade, 40.0% win) --
+4 winners and 3 losers roughly canceling out again. Same verdict as the
+first attempt, just with n=10 instead of n=7: still not a usable sample.
+
+**Stopping the loosen-and-retest cycle here, on purpose.** Continuing to
+try progressively looser rule variants against the exact same ~6-month
+holdout window is itself a subtle version of the overfitting this project
+already guards against (see rejected hypothesis above re: picking the
+best-looking variant) -- just one level up, at the level of *which signal
+shape* rather than *which parameter value*. Two structurally different
+rules, both landing in the same "technically positive, statistically
+meaningless" zone, points at the real constraint: **~6 months of 5-minute
+bars (the IEX free feed's actual limit) is not enough raw material for any
+entry rule this selective on 15 symbols, regardless of exact shape.**
+Did not proceed to building the live session runner or dashboard trigger
+either attempt was intended to feed (Phase 3/4 were explicitly gated on
+real signal, not a nominally-positive number). **Don't re-propose another
+loosened variant against this same dataset** -- the fix, if there is one,
+is a materially larger/longer intraday dataset (a paid data plan) or a
+fundamentally less selective signal design accepting more, individually
+weaker setups to get a workable sample size -- not another tweak to this
+one.
 
 ## Watchlist: 7 → 15 symbols (2026-09-08)
 
