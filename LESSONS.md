@@ -215,3 +215,28 @@ gets them, not just whoever's driving a particular session.
     this particular test — holdout expectancy failed independently, with
     Donchian's own holdout trades running **negative** at -0.434%/trade
     across n=74. The methodological point stands on its own regardless.)
+
+25. **A keyword match tells you a word is present, not what it was
+   said about — a verb attaches to whatever noun precedes it, which is
+   frequently not your asset.** 'plunge' blocked ETH/USD for 33
+   consecutive checks across 2.5 days on the headline "Ethereum Reclaims
+   $2,600 After a Week — Is a Bigger Rally Ahead?", whose summary reads
+   "Ethereum reclaims $2,600 as fees plunge". Transaction *fees* were
+   falling, which is good for Ethereum, inside an explicitly bullish
+   article. This was the fifth distinct false-positive class in this
+   keyword checker, and the first where no article-level filter was even
+   arguably at fault: one symbol tagged, no roundup phrasing, not an index
+   ETF, and the asset genuinely named in the text. Every earlier fix asked
+   "is this article really about my symbol?" — the right question here was
+   "is this *word* really about my symbol?", which substring matching
+   cannot answer at all. The durable split: **event keywords** ('lawsuit',
+   'bankruptcy', 'restated', 'recall') name something that happened TO a
+   company and barely admit another subject; **price-action verbs**
+   ('plunge', 'plummet', 'slump') take any subject at all — fees,
+   volatility, yields, volume, short interest — so they are structurally
+   unreliable regardless of how the surrounding filters are tuned.
+   Removed the whole family rather than adding a sixth patch. 'crash' was
+   kept deliberately, being a real corporate event when it is a vehicle
+   rather than a market. When a rule keeps failing in new ways, check
+   whether the failures share a *category* before writing another
+   special case for the latest one.
