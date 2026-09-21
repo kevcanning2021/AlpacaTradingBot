@@ -45,7 +45,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from alpaca_client import AlpacaClient
 from telegram_notifier import TelegramNotifier
@@ -69,6 +69,18 @@ SERVICES = [
     'sofi-bot.service', 'trading-2-0.service',
 ]
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
+
+# How far back a log error keeps an alert alive. Added 2026-09-21 after a
+# week-long miss: check_new_log_errors only ever inspected the journal since
+# the previous run (~15 min) and main() deletes any alert key not re-raised
+# on the next run, so this alert class was transient by construction. Nova
+# logged 51 failed crypto orders across five days and every snapshot read of
+# active_alerts correctly showed zero -- spread over ~768 runs the alert was
+# live perhaps 3-4% of the time. The Telegram pings all fired, so the human
+# watching a phone had strictly better information than anything reading the
+# state file, which is backwards. An alert meant to be noticed by something
+# that polls has to outlive the instant that raised it.
+LOG_ERROR_WINDOW_HOURS = 24
 
 # Repos checked for uncommitted drift. trading-2-0 (Nova) is deliberately
 # absent -- its VPS deployment is a plain copied directory, not a git repo;
@@ -255,6 +267,13 @@ def load_state():
     if not isinstance(last_log_check, dict):
         last_log_check = {}
     state['last_log_check'] = last_log_check
+
+    # Rolling record of which runs saw log errors, per unit, so a recurring
+    # fault stays visible between occurrences -- see LOG_ERROR_WINDOW_HOURS.
+    error_log = state.get('log_error_log')
+    if not isinstance(error_log, dict):
+        error_log = {}
+    state['log_error_log'] = error_log
     return state
 
 
@@ -277,8 +296,16 @@ def check_services():
     return issues
 
 
-def check_new_log_errors(unit, since_iso):
+def check_new_log_errors(unit, since_iso, error_log=None, now=None):
+    """Detection is unchanged -- errors in the journal since the previous run
+    -- but occurrences are now recorded in error_log so the alert survives
+    the quiet gaps between them (see LOG_ERROR_WINDOW_HOURS). error_log is
+    mutated in place and persisted in watchdog_state.json; passing None keeps
+    the old stateless behaviour, which the leaked-credential scan below still
+    relies on.
+    """
     issues = []
+    now = now or datetime.now(timezone.utc)
     cmd = ['journalctl', '-u', unit, '--no-pager', '-o', 'cat']
     if since_iso:
         cmd += ['--since', since_iso]
@@ -287,9 +314,38 @@ def check_new_log_errors(unit, since_iso):
     result = subprocess.run(cmd, capture_output=True, text=True)
     lines = result.stdout.splitlines()
     bad_lines = [l for l in lines if 'Traceback' in l or 'ERROR' in l]
-    if bad_lines:
-        sample = '\n'.join(bad_lines[-5:])
-        issues.append((f'log_errors:{unit}', f'New errors in {unit} log:\n{sample}'))
+
+    if error_log is None:
+        # Stateless fallback: original behaviour, alert only on a fresh hit.
+        if bad_lines:
+            sample = '\n'.join(bad_lines[-5:])
+            issues.append((f'log_errors:{unit}', f'New errors in {unit} log:\n{sample}'))
+    else:
+        entry = error_log.setdefault(unit, {'events': [], 'latest_sample': ''})
+        if bad_lines:
+            # One event per run that saw errors, not one per line -- keeps the
+            # list bounded (at most 96/day) while still counting recurrences.
+            entry['events'].append(now.isoformat())
+            entry['latest_sample'] = '\n'.join(bad_lines[-5:])
+        cutoff = now - timedelta(hours=LOG_ERROR_WINDOW_HOURS)
+        kept = []
+        for ts in entry['events']:
+            try:
+                if datetime.fromisoformat(ts) > cutoff:
+                    kept.append(ts)
+            except ValueError:
+                continue  # unparseable timestamp from an older state file
+        entry['events'] = kept
+        if kept:
+            first = min(kept)
+            issues.append((
+                f'log_errors:{unit}',
+                f'{len(kept)} run(s) with errors in {unit} in the last '
+                f'{LOG_ERROR_WINDOW_HOURS}h (first {first[:16]}, latest '
+                f'{max(kept)[:16]}):\n{entry["latest_sample"]}'
+            ))
+        else:
+            error_log.pop(unit, None)
 
     # Added 2026-09-05 after rotating a real exposed Nova key/secret -- see
     # ENV_FILES comment above. Deliberately does NOT include the matched
@@ -527,7 +583,8 @@ def main():
             all_issues.append((f'watchdog_internal_error:check_account:{account_key}', f'watchdog: check_account crashed for {cfg["label"]}: {e}'))
 
         try:
-            all_issues += check_new_log_errors(cfg['log_unit'], last_log_check.get(cfg['log_unit']))
+            all_issues += check_new_log_errors(cfg['log_unit'], last_log_check.get(cfg['log_unit']),
+                                               error_log=state['log_error_log'], now=now)
         except Exception as e:
             print(f"check_new_log_errors({account_key}) failed: {e}")
             all_issues.append((f'watchdog_internal_error:check_new_log_errors:{account_key}', f'watchdog: check_new_log_errors crashed for {cfg["label"]}: {e}'))
@@ -555,6 +612,15 @@ def main():
         should_alert = last_alert_at is None or (
             now - datetime.fromisoformat(last_alert_at)
         ).total_seconds() > ALERT_COOLDOWN_SECONDS
+        # A log-error alert now persists for LOG_ERROR_WINDOW_HOURS rather
+        # than clearing the moment errors pause, which would otherwise make
+        # the plain cooldown re-ping every 2h for a full day after a single
+        # burst. Re-ping these only when the count has actually grown; the
+        # alert stays visible in active_alerts (and on the dashboard)
+        # regardless, which is the part that was missing before.
+        if (should_alert and existing and key.startswith('log_errors:')
+                and existing.get('message') == msg):
+            should_alert = False
         if should_alert:
             messages.append(msg if last_alert_at is None else f'[STILL ACTIVE] {msg}')
             last_alert_at = now.isoformat()
