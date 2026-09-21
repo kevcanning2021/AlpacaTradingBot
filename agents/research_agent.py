@@ -39,7 +39,7 @@ RED_FLAG_KEYWORDS = [
     'default', 'defaults', 'covenant breach',
     'layoffs', 'layoff', 'mass layoffs',
     'resigns', 'resignation', 'steps down', 'ousted',
-    'plunge', 'plunges', 'plummet', 'plummets', 'crash', 'crashes',
+    'crash', 'crashes',
     'misses estimates', 'guidance cut', 'cuts guidance',
 ]
 
@@ -52,6 +52,32 @@ RED_FLAG_KEYWORDS = [
 # hedge-y analyst/macro commentary -- the genuine version ("company warns
 # investors of a miss") is already covered by 'misses estimates'/
 # 'guidance cut'.
+
+# 'plunge'/'plunges'/'plummet'/'plummets' removed 2026-09-21 after a real
+# false catch that blocked ETH/USD for 33 consecutive checks across 2.5
+# days: "Ethereum Reclaims $2,600 After a Week -- Is a Bigger Rally
+# Ahead?", whose summary reads "Ethereum reclaims $2,600 as fees plunge".
+# The word described transaction FEES falling -- unambiguously good for
+# Ethereum -- inside an explicitly bullish article. None of the four
+# article-level filters could catch it, and none of them were wrong to
+# pass it: one symbol tagged, no roundup phrasing, not an index ETF, and
+# the asset genuinely is named in the text. The problem isn't the article,
+# it's the keyword. A price-action verb attaches to whatever noun precedes
+# it -- "fees plunge", "volatility plunges", "yields plunge", "short
+# interest plummets" -- so it structurally cannot tell you anything about
+# the asset's own health. Contrast the event keywords kept above
+# ('lawsuit', 'bankruptcy', 'restated'), which describe something concrete
+# happening TO the company and carry no such ambiguity; those were also
+# the strongest performers when veto decisions were audited
+# (veto_value_analysis.py: restated -2.28%, lawsuit -1.13% mean forward
+# return, vs price-action keywords being the weakest).
+#
+# 'crash'/'crashes' deliberately KEPT despite the same grammatical shape:
+# a vehicle/aircraft crash is a real corporate event, not price action,
+# and it caught a genuine one live (a fatal Tesla Autopilot story,
+# correctly vetoing TSLA). The market-crash reading is already largely
+# covered by _INDEX_ETF_TICKERS, since "the market crashed" pieces get
+# tagged with several index funds at once.
 
 # News older than this isn't treated as a fresh reason to veto an entry -- a
 # lawsuit from 3 weeks ago is already priced in; one from 6 hours ago might

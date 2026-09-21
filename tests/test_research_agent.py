@@ -280,6 +280,37 @@ class ResearchAgentTests(unittest.TestCase):
         result = research_agent.propose({**SIGNAL, 'symbol': 'SPY'}, client=client)
         self.assertTrue(result['veto'])
 
+    def test_price_action_keyword_on_a_bullish_article_does_not_veto(self):
+        """Real bug found live on Nova 2026-09-21: 'plunge' blocked ETH/USD
+        for 33 consecutive checks across 2.5 days on "Ethereum Reclaims
+        $2,600 After a Week", whose summary reads "as fees plunge" --
+        transaction fees falling, good news, in an explicitly bullish
+        article. A price-action verb attaches to whatever noun precedes it
+        ("fees plunge", "yields plunge"), so it can't indicate the asset's
+        own health. Ported here because the keyword list is shared."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline='Apple Reclaims $250 After a Week - Is a Bigger Rally Ahead?',
+            summary='Apple reclaims $250 as supplier costs plunge. Analysts see upside.',
+            symbols=['AAPL'],
+        )]
+        result = research_agent.propose(SIGNAL, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_vehicle_crash_still_vetoes(self):
+        """'crash' was deliberately KEPT when plunge/plummet were removed --
+        a vehicle crash is a real corporate event, not price action, and
+        this exact story correctly vetoed TSLA live on Nova."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="Musk Says Autopilot Wasn't in Use During Tesla Crash",
+            symbols=['TSLA'],
+        )]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'TSLA'}, client=client)
+        self.assertTrue(result['veto'])
+        self.assertIn('crash', result['risk_flags'])
+
 
 if __name__ == '__main__':
     unittest.main()
