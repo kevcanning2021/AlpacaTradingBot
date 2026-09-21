@@ -189,6 +189,92 @@ async def account_positions(request):
     return JSONResponse(positions)
 
 
+
+CLOSED_TRADES_TTL = 30  # realised trades only change when a position closes
+MAX_CLOSED_TRADES = 25
+
+
+def _load_closed_trades(account_id):
+    """Realised P&L per completed round-trip for one account.
+
+    Two different sources behind one shape, because the bots record trades
+    differently: Main/Sofi append to a JSON list (already carrying `pnl` and
+    a fractional `pnl_pct`), while Nova writes a sqlite journal row with
+    `pnl_dollars` and `pnl_r` but no stored percentage. Nova's percentage is
+    therefore derived as pnl / (quantity * entry_price), which is correct for
+    longs and shorts alike -- unlike (exit-entry)/entry, which inverts on a
+    short.
+
+    `pnl_pct` is returned as a FRACTION, not a percentage, so the frontend's
+    existing pct() helper (which multiplies by 100) formats it the same way
+    it already formats unrealized_plpc on open positions.
+
+    Returns newest-first, capped at MAX_CLOSED_TRADES. A missing file/journal
+    means that bot hasn't closed a trade yet -- an empty list, not an error.
+    """
+    if account_id in config.CLOSED_TRADES_PATHS:
+        path = config.CLOSED_TRADES_PATHS[account_id]
+        try:
+            with open(path) as f:
+                history = json.load(f)
+        except FileNotFoundError:
+            return []
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(f"[dashboard] Failed to read closed trades for {account_id} ({path}): {e}")
+            return []
+        trades = []
+        for t in history:
+            pnl = t.get('pnl')
+            trades.append({
+                'symbol': t.get('symbol'),
+                'closed_at': t.get('timestamp'),
+                'pnl': pnl,
+                'pnl_pct': t.get('pnl_pct'),
+                'pnl_r': None,  # Main/Sofi don't size by R, so there's none to report
+                'outcome': None if pnl is None else ('win' if pnl > 0 else 'loss'),
+            })
+        trades.reverse()  # file is append-order (oldest first)
+        return trades[:MAX_CLOSED_TRADES]
+
+    if account_id == 'trading2':
+        import sqlite3
+        try:
+            with sqlite3.connect(f'file:{config.NOVA_JOURNAL_DB_PATH}?mode=ro', uri=True) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    'SELECT symbol, exit_time, pnl_dollars, pnl_r, outcome, quantity, entry_price '
+                    'FROM trades WHERE exit_time IS NOT NULL '
+                    'ORDER BY exit_time DESC LIMIT ?', (MAX_CLOSED_TRADES,)
+                ).fetchall()
+        except (sqlite3.Error, OSError) as e:
+            logger.error(f"[dashboard] Failed to read Nova's journal for closed trades: {e}")
+            return []
+        trades = []
+        for r in rows:
+            cost = (r['quantity'] or 0) * (r['entry_price'] or 0)
+            pnl = r['pnl_dollars']
+            trades.append({
+                'symbol': r['symbol'],
+                'closed_at': r['exit_time'],
+                'pnl': pnl,
+                'pnl_pct': (pnl / cost) if (cost and pnl is not None) else None,
+                'pnl_r': r['pnl_r'],
+                'outcome': r['outcome'],
+            })
+        return trades
+
+    return []
+
+
+async def closed_trades(request):
+    account_id = request.path_params['account_id']
+    if _account_or_404(account_id) is None:
+        return JSONResponse({'error': 'unknown account'}, status_code=404)
+    data = await get_or_fetch(account_id, 'closed_trades', CLOSED_TRADES_TTL,
+                              lambda: _load_closed_trades(account_id))
+    return JSONResponse(data)
+
+
 async def account_orders(request):
     account_id = request.path_params['account_id']
     client = _account_or_404(account_id)
@@ -411,6 +497,7 @@ routes = [
     Route('/api/accounts/{account_id}/summary', account_summary),
     Route('/api/accounts/{account_id}/positions', account_positions),
     Route('/api/accounts/{account_id}/orders', account_orders),
+    Route('/api/accounts/{account_id}/trades', closed_trades),
     Route('/api/agents-overview', agents_overview),
     Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),

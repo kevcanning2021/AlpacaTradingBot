@@ -74,6 +74,18 @@ FLEET_AUDIT_LOG_PATHS = {
     'nova': os.getenv('FLEET_AUDIT_LOG_PATH_NOVA', '/opt/trading-2-0/fleet_audit_log.json'),
 }
 
+# Each bot's own record of CLOSED (round-trip) trades with realised P&L.
+# Deliberately distinct from /api/accounts/{id}/orders, which returns Alpaca
+# orders -- one side each, a buy OR a sell, carrying no profit/loss of their
+# own, so "what did this trade make?" cannot be answered from orders alone.
+# Keyed by dashboard account id (not bot name) since it's read per selected
+# account. Nova is absent on purpose: it keeps round-trips in the sqlite
+# journal at NOVA_JOURNAL_DB_PATH above, read separately.
+CLOSED_TRADES_PATHS = {
+    'prod': os.getenv('TRADE_HISTORY_PATH_MAIN', '/opt/alpaca-bot/trade_history.json'),
+    'sofi': os.getenv('TRADE_HISTORY_PATH_SOFI', '/opt/sofi-bot/trade_history.json'),
+}
+
 # Mirrors trader.py's own constants (Main/Sofi's shared codebase) -- these
 # aren't read from either bot's .env (STOP_LOSS_THRESHOLD/TRAILING_STOP_
 # THRESHOLD are plain hardcoded constants there, not env-configurable), so

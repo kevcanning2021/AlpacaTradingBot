@@ -105,6 +105,7 @@ async function refresh() {
         api(`/api/accounts/${currentAccount}/summary`).then((r) => r.json()).then(renderSummary),
         api(`/api/accounts/${currentAccount}/positions`).then((r) => r.json()).then(renderPositions),
         api(`/api/accounts/${currentAccount}/orders`).then((r) => r.json()).then(renderOrders),
+        api(`/api/accounts/${currentAccount}/trades`).then((r) => r.json()).then(renderClosedTrades),
       );
     }
     await Promise.all(accountCalls);
@@ -367,6 +368,39 @@ function renderPositions(positions) {
 
 function niceTime(iso) {
   return (iso || '').replace('T', ' ').slice(0, 16);
+}
+
+function renderClosedTrades(trades) {
+  const list = document.getElementById('closed-trades-list');
+  const total = document.getElementById('closed-trades-total');
+  list.innerHTML = '';
+  if (!trades || !trades.length) {
+    total.textContent = '';
+    list.innerHTML = '<div class="decision-item muted">No closed trades yet.</div>';
+    return;
+  }
+  // Running total across what's shown, so the header answers "am I up or
+  // down overall?" without the reader adding up rows by hand.
+  const sum = trades.reduce((a, t) => a + (parseFloat(t.pnl) || 0), 0);
+  total.textContent = `— ${trades.length} shown, ${money(sum)}`;
+  total.className = sum > 0 ? 'muted positive' : sum < 0 ? 'muted negative' : 'muted';
+
+  trades.forEach((t) => {
+    const item = document.createElement('div');
+    item.className = 'decision-item';
+    const pnl = parseFloat(t.pnl);
+    const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
+    const when = t.closed_at ? new Date(t.closed_at).toLocaleString() : '';
+    // R is Nova-only (it sizes by risk multiple); Main/Sofi send null.
+    const r = (t.pnl_r === null || t.pnl_r === undefined)
+      ? '' : ` <span class="muted">${(t.pnl_r >= 0 ? '+' : '') + Number(t.pnl_r).toFixed(2)}R</span>`;
+    const pctPart = (t.pnl_pct === null || t.pnl_pct === undefined) ? '' : ` (${pct(t.pnl_pct)})`;
+    item.innerHTML =
+      `<strong>${escapeHtml(t.symbol || '?')}</strong> ` +
+      `<span class="${pnlClass}">${money(t.pnl)}${escapeHtml(pctPart)}</span>${r}` +
+      `<div class="muted">${escapeHtml(when)}</div>`;
+    list.appendChild(item);
+  });
 }
 
 function renderOrders(orders) {
