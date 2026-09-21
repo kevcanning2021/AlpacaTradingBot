@@ -240,3 +240,23 @@ gets them, not just whoever's driving a particular session.
    rather than a market. When a rule keeps failing in new ways, check
    whether the failures share a *category* before writing another
    special case for the latest one.
+
+26. **A transient alert is not a monitoring system — if an alert
+   clears itself the moment the condition pauses, anyone who checks
+   periodically will almost always see nothing.** `watchdog.py`'s
+   `check_new_log_errors` inspects each unit's journal only *since the last
+   watchdog run* (a 15-minute window), and `main()` deletes any alert key
+   not re-raised on the following run. Nova logged 51 failed crypto orders
+   across five separate days and every periodic check of `active_alerts`
+   correctly reported zero: with the errors spread over ~768 watchdog runs
+   the alert was live roughly 3-4% of the time, so a snapshot read had a
+   ~96% chance of seeing an empty dict. The Telegram pings all fired, so a
+   human watching a phone had strictly better information than anything
+   reading the state file. **Snapshot state answers "is something broken
+   right now", which is a much weaker question than "has anything been
+   going wrong"** — and intermittent recurring failure is the most common
+   shape a real problem takes. Any current-state check needs a
+   time-windowed history check beside it (`journalctl --since '24 hours
+   ago' | grep -cE 'ERROR|Traceback'`), and any alert meant to be noticed
+   by something that polls needs to either persist until acknowledged or
+   carry a recurrence count, rather than silently vanishing.
