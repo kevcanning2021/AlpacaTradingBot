@@ -260,3 +260,21 @@ gets them, not just whoever's driving a particular session.
    ago' | grep -cE 'ERROR|Traceback'`), and any alert meant to be noticed
    by something that polls needs to either persist until acknowledged or
    carry a recurrence count, rather than silently vanishing.
+
+27. **Fixing a blocker exposes every latent bug in the code path it
+   was blocking -- expect the next failure immediately, and look for it.**
+   Nova's crypto orders had failed on sizing for weeks, so not one had ever
+   filled. Within three hours of that being fixed, a second bug surfaced
+   that had been dormant the entire time: Alpaca orders crypto as
+   'ETH/USD' but reports the position as 'ETHUSD', so every
+   'symbol in open_position_symbols()' check silently evaluated False.
+   That let ETH be bought twice against a 25% per-position cap, made
+   reconciliation record each position's own BUY as its exit (fabricating
+   two wins), and orphaned a live position with no journal row -- meaning
+   no stop-loss at all, since crypto has no bracket/OCO at Alpaca and the
+   exit monitor only reads journal.open_trades(). None of it was reachable
+   while sizing was broken. The rule: after unblocking a path that has
+   never actually executed, treat everything downstream as untested
+   regardless of how long the code has existed, and go looking rather than
+   waiting to be told. A fix that makes a feature work for the first time
+   is a deployment of that whole path, not a one-line change.
