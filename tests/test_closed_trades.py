@@ -133,5 +133,40 @@ class LoadClosedTradesNovaTests(unittest.TestCase):
         self.assertEqual(app._load_closed_trades('trading2'), [])
 
 
+class MainAccountUsesJournalNotJsonTests(unittest.TestCase):
+    """Main switched from alpaca-bot (trade_history.json) to nova-main
+    (sqlite journal) on 2026-09-23. Both readers check CLOSED_TRADES_PATHS
+    first and fall through to the journal, so a leftover 'prod' entry there
+    would have gone on silently serving the RETIRED bot's frozen history as
+    though it were live -- the failure mode being guarded here."""
+
+    def test_prod_is_no_longer_served_from_a_json_history_file(self):
+        self.assertNotIn('prod', config.CLOSED_TRADES_PATHS,
+                          "prod must fall through to its sqlite journal")
+
+    def test_prod_resolves_to_the_nova_main_journal(self):
+        self.assertEqual(config.journal_db_path('prod'), config.MAIN_JOURNAL_DB_PATH)
+
+    def test_the_two_journals_are_never_the_same_file(self):
+        """$50 Nova and $100k Main run identical code; pointing both at one
+        journal would merge the two samples and destroy the comparison."""
+        self.assertNotEqual(config.journal_db_path('prod'),
+                             config.journal_db_path('trading2'))
+
+    def test_accounts_without_a_journal_resolve_to_none(self):
+        self.assertIsNone(config.journal_db_path('sofi'))
+        self.assertIsNone(config.journal_db_path('nonsense'))
+
+    def test_helper_reflects_patched_module_attributes(self):
+        """journal_db_path is a function precisely so the suite can patch the
+        paths; a dict built at import time would ignore the patch."""
+        orig = config.MAIN_JOURNAL_DB_PATH
+        try:
+            config.MAIN_JOURNAL_DB_PATH = '/tmp/patched-main.db'
+            self.assertEqual(config.journal_db_path('prod'), '/tmp/patched-main.db')
+        finally:
+            config.MAIN_JOURNAL_DB_PATH = orig
+
+
 if __name__ == '__main__':
     unittest.main()

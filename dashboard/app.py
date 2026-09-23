@@ -124,18 +124,23 @@ def _load_peak_prices(account_id):
         return {}
 
 
-def _load_nova_open_trade_stops():
-    """{symbol: {stop_price, target_price}} from Nova's own sqlite journal --
-    fixed at entry, never trails (Nova has no peak-tracking/trailing-stop
-    mechanism at all, unlike Main/Sofi)."""
+def _load_journal_open_trade_stops(account_id):
+    """{symbol: {stop_price, target_price}} from a bot's sqlite journal --
+    fixed at entry, never trails (the journal-keeping bots have no
+    peak-tracking/trailing-stop mechanism at all, unlike Sofi).
+
+    Covers Nova and, since 2026-09-23, Main -- both run Nova's code."""
     import sqlite3
+    db = config.journal_db_path(account_id)
+    if not db:
+        return {}
     try:
-        with sqlite3.connect(config.NOVA_JOURNAL_DB_PATH) as conn:
+        with sqlite3.connect(db) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT symbol, stop_price, target_price FROM trades WHERE outcome = 'open'").fetchall()
             return {r['symbol']: {'stop_price': r['stop_price'], 'target_price': r['target_price']} for r in rows}
     except (sqlite3.Error, OSError) as e:
-        logger.error(f"[dashboard] Failed to read Nova's journal for open-trade stops: {e}")
+        logger.error(f"[dashboard] Failed to read {account_id}'s journal for open-trade stops: {e}")
         return {}
 
 
@@ -151,7 +156,7 @@ async def account_positions(request):
         return JSONResponse({'error': 'upstream fetch failed'}, status_code=502)
 
     peak_prices = _load_peak_prices(account_id)
-    nova_stops = _load_nova_open_trade_stops() if account_id == 'trading2' else {}
+    journal_stops = _load_journal_open_trade_stops(account_id)
 
     positions = []
     for p in data:
@@ -181,10 +186,10 @@ async def account_positions(request):
                 entry['trailing_stop_price'] = peak * (1 - trail_pct) if peak > 0 else None
             except (TypeError, ValueError):
                 pass
-        elif symbol in nova_stops:
+        elif symbol in journal_stops:
             # Nova: fixed at entry, never trails -- shown as-is, no peak.
-            entry['stop_price'] = nova_stops[symbol]['stop_price']
-            entry['target_price'] = nova_stops[symbol]['target_price']
+            entry['stop_price'] = journal_stops[symbol]['stop_price']
+            entry['target_price'] = journal_stops[symbol]['target_price']
         positions.append(entry)
     return JSONResponse(positions)
 
@@ -236,10 +241,11 @@ def _load_closed_trades(account_id):
         trades.reverse()  # file is append-order (oldest first)
         return trades[:MAX_CLOSED_TRADES]
 
-    if account_id == 'trading2':
+    journal_db = config.journal_db_path(account_id)
+    if journal_db:
         import sqlite3
         try:
-            with sqlite3.connect(f'file:{config.NOVA_JOURNAL_DB_PATH}?mode=ro', uri=True) as conn:
+            with sqlite3.connect(f'file:{journal_db}?mode=ro', uri=True) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     'SELECT symbol, exit_time, pnl_dollars, pnl_r, outcome, quantity, entry_price '

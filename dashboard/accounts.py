@@ -7,7 +7,7 @@ from dashboard import config
 # those exactly so the dashboard and the registry never drift apart again.
 ACCOUNTS = {
     'prod': {
-        'label': 'Main',
+        'label': 'Main (Nova strategy)',
         'client': ReadOnlyAlpacaClient(AlpacaClient(
             api_key=config.ALPACA_PROD_API_KEY,
             secret_key=config.ALPACA_PROD_SECRET_KEY,

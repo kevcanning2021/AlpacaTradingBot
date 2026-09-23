@@ -22,7 +22,7 @@ ALPACA_TRADING2_SECRET_KEY = os.getenv('ALPACA_TRADING2_SECRET_KEY', '')
 # feature; now always all three, merged in app.py and tagged with which bot
 # each decision came from.
 RESEARCH_AGENT_DECISIONS_PATHS = {
-    'main': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_MAIN', '/opt/alpaca-bot/agent_decisions_state.json'),
+    'main': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_MAIN', '/opt/nova-main/data/research_decisions.json'),  # nova-main since 2026-09-23
     'sofi': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_SOFI', '/opt/sofi-bot/agent_decisions_state.json'),
     'nova': os.getenv('RESEARCH_AGENT_DECISIONS_PATH_NOVA', '/opt/trading-2-0/data/research_decisions.json'),
 }
@@ -53,7 +53,11 @@ STRATEGY_CHECK_STATE_PATH = os.getenv(
 # journal instead -- see NOVA_JOURNAL_DB_PATH below), so there's
 # deliberately no 'nova' entry here.
 PEAK_PRICES_PATHS = {
-    'prod': os.getenv('PEAK_PRICES_PATH_MAIN', '/opt/alpaca-bot/peak_prices_state.json'),
+    # 'prod' removed 2026-09-23: Main's account is now traded by nova-main
+    # (Nova's code), which has no trailing-stop mechanism -- same reason Nova
+    # was never in here. The old file still exists but stopped changing the
+    # moment alpaca-bot was retired, and a frozen peak price rendered next to
+    # a live position is worse than none.
     'sofi': os.getenv('PEAK_PRICES_PATH_SOFI', '/opt/sofi-bot/peak_prices_state.json'),
 }
 
@@ -61,6 +65,28 @@ PEAK_PRICES_PATHS = {
 # open trade's fixed stop_price/target_price, same non-Alpaca-data pattern
 # as PEAK_PRICES_PATHS above.
 NOVA_JOURNAL_DB_PATH = os.getenv('NOVA_JOURNAL_DB_PATH', '/opt/trading-2-0/data/trade_journal.db')
+
+# Main's account has been traded by Nova's code since 2026-09-23 (alpaca-bot
+# retired), so it now keeps the same sqlite journal rather than Main's old
+# trade_history.json. Separate deployment, separate file: /opt/nova-main is a
+# clone of /opt/trading-2-0 at the same commit, and the two journals must
+# never be pointed at each other -- the whole point is comparing the same
+# strategy at $50 and at $100k.
+MAIN_JOURNAL_DB_PATH = os.getenv('MAIN_JOURNAL_DB_PATH', '/opt/nova-main/data/trade_journal.db')
+
+
+def journal_db_path(account_id):
+    """sqlite journal for accounts whose bot keeps one, else None.
+
+    Deliberately a function, not a dict literal: the test-suite patches
+    NOVA_JOURNAL_DB_PATH/MAIN_JOURNAL_DB_PATH as module attributes, and a dict
+    built at import time would capture the original values and silently ignore
+    the patch.
+    """
+    return {
+        'trading2': NOVA_JOURNAL_DB_PATH,
+        'prod': MAIN_JOURNAL_DB_PATH,
+    }.get(account_id)
 
 # Each bot's own daily_fleet_audit.py (cron, independent of any Claude
 # session -- see project notes) appends one entry per day to its own
@@ -82,7 +108,10 @@ FLEET_AUDIT_LOG_PATHS = {
 # account. Nova is absent on purpose: it keeps round-trips in the sqlite
 # journal at NOVA_JOURNAL_DB_PATH above, read separately.
 CLOSED_TRADES_PATHS = {
-    'prod': os.getenv('TRADE_HISTORY_PATH_MAIN', '/opt/alpaca-bot/trade_history.json'),
+    # 'prod' removed 2026-09-23 -- it now keeps a sqlite journal instead, see
+    # journal_db_path(). Both readers check this dict FIRST and fall through
+    # to the journal, so leaving a stale entry here would have quietly kept
+    # serving the retired bot's frozen history as if it were current.
     'sofi': os.getenv('TRADE_HISTORY_PATH_SOFI', '/opt/sofi-bot/trade_history.json'),
 }
 

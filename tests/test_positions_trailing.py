@@ -78,12 +78,12 @@ class LoadNovaOpenTradeStopsTests(unittest.TestCase):
             ('NVDA', 170.0, 185.0, 'open'),
             ('AAPL', 310.0, 330.0, 'win'),  # closed -- must not appear
         ])
-        result = app._load_nova_open_trade_stops()
+        result = app._load_journal_open_trade_stops('trading2')
         self.assertEqual(result, {'NVDA': {'stop_price': 170.0, 'target_price': 185.0}})
 
     def test_missing_db_returns_empty_dict_not_an_error(self):
         config.NOVA_JOURNAL_DB_PATH = '/nonexistent/journal.db'
-        self.assertEqual(app._load_nova_open_trade_stops(), {})
+        self.assertEqual(app._load_journal_open_trade_stops('trading2'), {})
 
 
 class AccountPositionsEnrichmentTests(unittest.IsolatedAsyncioTestCase):

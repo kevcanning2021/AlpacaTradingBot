@@ -65,9 +65,10 @@ def _load_full_history(account_id, config):
                 continue
         return returns, [], exits
 
-    if account_id == 'trading2':
+    journal_db = config.journal_db_path(account_id)
+    if journal_db:
         try:
-            with sqlite3.connect(f'file:{config.NOVA_JOURNAL_DB_PATH}?mode=ro', uri=True) as conn:
+            with sqlite3.connect(f'file:{journal_db}?mode=ro', uri=True) as conn:
                 rows = conn.execute(
                     'SELECT entry_time, exit_time, pnl_dollars, quantity, entry_price '
                     'FROM trades WHERE exit_time IS NOT NULL ORDER BY exit_time'
