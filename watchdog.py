@@ -92,9 +92,15 @@ LOG_ERROR_WINDOW_HOURS = 24
 GIT_REPOS = {
     'alpaca-bot': '/opt/alpaca-bot',
     'sofi-bot': '/opt/sofi-bot',
+    # trading-2-0 (Nova) added 2026-09-23. It had been missing since this
+    # check was written, which meant the single most actively developed repo
+    # in the fleet was the one repo whose uncommitted work was never flagged
+    # -- while 'fleet-review-agent', retired 2026-08-31 and unchanged since,
+    # was still being watched. Exactly backwards, and silent about it because
+    # both paths exist so nothing ever errored.
+    'trading-2-0': '/opt/trading-2-0',
     'alpaca-dashboard': '/opt/alpaca-dashboard',
     'alpaca-bot-test': '/opt/alpaca-bot-test',
-    'fleet-review-agent': '/opt/fleet-review-agent',
 }
 
 # Added 2026-09-05 after rotating a real exposed Nova API key/secret (an

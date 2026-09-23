@@ -205,3 +205,20 @@ gets them, not just whoever's driving a particular session.
     that's the regime it would start trading in immediately. A strategy
     can pass every historical robustness check and still be the wrong
     choice today if its current trajectory is bad.
+
+26. **A monitoring list is code that silently rots -- audit what it
+    watches against what actually exists.** GIT_REPOS, the list of repos
+    checked for uncommitted drift, contained fleet-review-agent (retired
+    2026-08-31, untouched since) but NOT /opt/trading-2-0 -- Nova, by a
+    wide margin the most actively developed repo in the fleet. The single
+    most likely place for uncommitted work was the one place never
+    checked, while a frozen repo was watched faithfully. Nothing ever
+    errored, because both paths exist and git status succeeds on either;
+    the check reported "no drift" in a tone indistinguishable from real
+    coverage. This is the failure mode specific to monitoring code: when
+    ordinary code loses touch with reality it throws, but when a monitor
+    does, it returns a clean result -- and a clean result is exactly what
+    you were hoping for, so nobody looks twice. Any config enumerating
+    what to watch (services, repos, accounts, log paths) needs its own
+    periodic reconciliation against the live system, because its failures
+    present as good news.
