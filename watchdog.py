@@ -65,7 +65,15 @@ SERVICES = [
     # scanner, different watchlist for real diversification). All three are
     # deliberately stopped+disabled -- alerting on any being inactive would
     # just be noise.
-    'alpaca-bot.service', 'alpaca-dashboard.service',
+    # alpaca-bot.service retired 2026-09-23 (stopped + disabled; nothing
+    # deleted, re-enable with `systemctl enable --now alpaca-bot`). Main's
+    # dual-signal scanner returned +0.07% over its whole life, while Nova's
+    # strategy returned +9.7% on a $50 account it can never scale past -- the
+    # PDT day-trade limit only binds under $25k. nova-main.service now runs
+    # Nova's code against Main's ~$100k paper account to find out whether that
+    # edge is real at size, or was just three lucky overnight META gaps.
+    # Leaving alpaca-bot in this list would alert every run now it is off.
+    'nova-main.service', 'alpaca-dashboard.service',
     'sofi-bot.service', 'trading-2-0.service',
 ]
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
@@ -82,9 +90,12 @@ ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 # that polls has to outlive the instant that raised it.
 LOG_ERROR_WINDOW_HOURS = 24
 
-# Repos checked for uncommitted drift. trading-2-0 (Nova) is deliberately
-# absent -- its VPS deployment is a plain copied directory, not a git repo;
-# source of truth lives on the user's Windows machine + GitHub instead.
+# Repos checked for uncommitted drift. The note that used to sit here said
+# trading-2-0 was "deliberately absent -- a plain copied directory, not a git
+# repo". That was untrue by 2026-09-23 (it has its own .git and a GitHub
+# remote, and is committed to constantly), and because the omission carried a
+# confident-sounding justification, nobody re-checked it. A comment explaining
+# why something is missing ages into the reason it stays missing.
 # pdt15rev-bot removed 2026-09-02 (retired, see SERVICES comment) -- its repo
 # is left untouched as historical record but nothing will commit to it again,
 # so drift-checking it would just be permanent noise. sofi-bot added in its
@@ -141,7 +152,11 @@ _LEAKED_SECRET_PATTERN = re.compile(r"(?i)secret[a-z_]*\s*[=:]\s*['\"]?([A-Za-z0
 ACCOUNTS = {
     'production': {
         'label': 'Production',
-        'log_unit': 'alpaca-bot.service',
+        # Same Alpaca account; the bot trading it changed 2026-09-23 from
+        # alpaca-bot.service (retired) to nova-main.service. Left pointing at
+        # the dead unit, this would scan a journal that never gets another
+        # line -- i.e. report perfect health forever.
+        'log_unit': 'nova-main.service',
         'api_key': os.getenv('ALPACA_API_KEY_MAIN', ''),
         'secret_key': os.getenv('ALPACA_SECRET_KEY_MAIN', ''),
     },
@@ -171,7 +186,7 @@ ACCOUNTS = {
 # (same paths dashboard/config.py reads for its decision-history panel), so
 # no cross-account auth is needed to read them, just the path.
 RESEARCH_AGENT_DECISIONS_PATHS = {
-    'production': '/opt/alpaca-bot/agent_decisions_state.json',
+    'production': '/opt/nova-main/data/research_decisions.json',  # nova-main since 2026-09-23
     'sofi': '/opt/sofi-bot/agent_decisions_state.json',
     'trading2': '/opt/trading-2-0/data/research_decisions.json',
 }
