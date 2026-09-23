@@ -297,3 +297,17 @@ gets them, not just whoever's driving a particular session.
    before being sent somewhere that will reject it for being too large,
    round toward the safe side deliberately -- and prefer an API that takes
    no number at all.
+
+29. **`open(path, 'w').write(open(path).read() + extra)` destroys
+   the file: the truncating open is evaluated before the read.** Used this
+   to append tests to an existing file and silently emptied it, keeping only
+   the new content. Nothing raised -- the script printed success. It
+   surfaced only because the suite total dropped (90 passed -> 74) while the
+   new tests failed for unrelated-looking reasons, and it was recoverable
+   only because the file happened to be committed. Read the whole file into
+   a variable FIRST, then open for write; better still, write via a
+   temporary file and rename. The wider lesson is the detection, not the
+   gotcha: a test *count* falling is a signal in its own right, distinct
+   from tests failing, and it is easy to miss while reading a list of
+   failures. Check the total, not just the failures -- and treat any edit
+   that both reads and writes the same path as a place to be careful.
