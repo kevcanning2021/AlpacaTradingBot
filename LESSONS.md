@@ -311,3 +311,20 @@ gets them, not just whoever's driving a particular session.
    from tests failing, and it is easy to miss while reading a list of
    failures. Check the total, not just the failures -- and treat any edit
    that both reads and writes the same path as a place to be careful.
+
+30. **Fixing what triggered a bug is not the same as fixing the
+   fragile assumption it exploited -- go back and guard the assumption
+   too.** _reconcile_closed_positions took the most recently filled order
+   to be a position's exit, without checking its side. The symbol-form
+   mismatch (LESSONS 27/9) made a live position look closed, so the newest
+   fill was its own BUY -- recorded as the exit, fabricating two wins and
+   orphaning a real position with no stop. Fixing the symbol handling
+   removed that particular route in, and it would have been easy to stop
+   there: the observed bug was gone and the tests passed. But the
+   assumption underneath was still unguarded, so any future path reaching
+   that code with an entry as the newest fill would fail identically. Now
+   the exit side is matched explicitly (a long closes with a sell, a short
+   with a buy) and an unexplained disappearance leaves the trade open
+   rather than inventing a price. After fixing a cause, ask what the
+   broken code was ASSUMING, and whether anything still relies on that
+   assumption holding.
