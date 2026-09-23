@@ -328,3 +328,17 @@ gets them, not just whoever's driving a particular session.
    rather than inventing a price. After fixing a cause, ask what the
    broken code was ASSUMING, and whether anything still relies on that
    assumption holding.
+
+31. **An uncovered function might not need tests -- check for callers
+   before writing them.** A coverage audit flagged four untested functions
+   in indicators.py. The instinct is to write four sets of tests; the
+   right first move was to grep for callers. Two had none at all. Worse,
+   one of them (macd) was still being computed by add_all_indicators into
+   three columns on every bar, for every symbol, on every timeframe, and
+   nothing ever read one of them -- wasted work in a loop that runs every
+   60 seconds. Writing tests for it would have locked in dead code and
+   made the coverage number look like reassurance. Deleting the two
+   functions took indicators.py from 46% to 100% while REMOVING 15
+   statements. Coverage measures what is tested, not what is needed: treat
+   a gap as a question (why does nothing exercise this?) rather than an
+   instruction to write a test.
