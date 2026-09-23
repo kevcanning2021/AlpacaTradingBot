@@ -278,3 +278,22 @@ gets them, not just whoever's driving a particular session.
    regardless of how long the code has existed, and go looking rather than
    waiting to be told. A fix that makes a feature work for the first time
    is a deployment of that whole path, not a one-line change.
+
+28. **Rounding a quantity is directional: round() on a SELL asks for
+   more than you hold and is rejected outright.** broker.submit_market_order
+   used round(quantity, 6), which rounds half UP. A real 0.010044825 ETH
+   position became a request for 0.010045 -- 'insufficient balance for ETH
+   (requested: 0.010045, available: 0.010044825)' -- and the exit then
+   failed on every poll, 137 times across two hours, while the stop sat
+   triggered and the position had no way out. It survived only because the
+   price recovered above the stop on its own, which is luck, not
+   protection. Truncate rather than round for any order quantity (_floor6):
+   under-requesting is recoverable on both sides, over-requesting is not.
+   Better still for a full exit, do not compute a quantity at all --
+   Alpaca's close_position liquidates exactly what is held, which also
+   avoids leaving dust, and dust is not cosmetic here: any remainder keeps
+   the symbol in get_open_position_symbols() and would block re-entry on
+   that symbol indefinitely. General form: whenever a number is rounded
+   before being sent somewhere that will reject it for being too large,
+   round toward the safe side deliberately -- and prefer an API that takes
+   no number at all.
