@@ -86,6 +86,15 @@ CLOSED_TRADES_PATHS = {
     'sofi': os.getenv('TRADE_HISTORY_PATH_SOFI', '/opt/sofi-bot/trade_history.json'),
 }
 
+# Each bot's own git repo, read only to date its most recent bug fix as a
+# code-stability signal for the live-readiness panel. Keyed by dashboard
+# account id like CLOSED_TRADES_PATHS above.
+BOT_REPO_PATHS = {
+    'prod': os.getenv('BOT_REPO_MAIN', '/opt/alpaca-bot'),
+    'sofi': os.getenv('BOT_REPO_SOFI', '/opt/sofi-bot'),
+    'trading2': os.getenv('BOT_REPO_NOVA', '/opt/trading-2-0'),
+}
+
 # Mirrors trader.py's own constants (Main/Sofi's shared codebase) -- these
 # aren't read from either bot's .env (STOP_LOSS_THRESHOLD/TRAILING_STOP_
 # THRESHOLD are plain hardcoded constants there, not env-configurable), so

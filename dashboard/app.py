@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse, FileResponse
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 
-from dashboard import auth, config
+from dashboard import auth, config, live_readiness
 from dashboard.accounts import ACCOUNTS, AGENTS_OVERVIEW, get_client
 from dashboard.cache import get_or_fetch
 
@@ -275,6 +275,37 @@ async def closed_trades(request):
     return JSONResponse(data)
 
 
+
+LIVE_READINESS_TTL = 300  # criteria move on the scale of days, not seconds
+
+BOT_LABELS = {'prod': 'Main', 'sofi': 'Sofi', 'trading2': 'Nova'}
+
+
+def _load_live_readiness():
+    """Per-bot readiness for real money, evaluated fresh from each bot's own
+    trade history and repo. Fleet-wide rather than account-scoped (like
+    /api/fleet-audit) because the interesting question is comparative --
+    which bot is closest -- not one bot in isolation. One bot's unreadable
+    history must not take the panel down for the others, so each is
+    independently guarded."""
+    out = []
+    for account_id, label in BOT_LABELS.items():
+        try:
+            result = live_readiness.assess(account_id, config,
+                                            config.BOT_REPO_PATHS.get(account_id))
+        except Exception as e:
+            logger.error(f"[dashboard] Live-readiness assessment failed for {account_id}: {e}")
+            continue
+        result['bot'] = label
+        out.append(result)
+    return out
+
+
+async def live_readiness_endpoint(request):
+    data = await get_or_fetch('fleet', 'live_readiness', LIVE_READINESS_TTL, _load_live_readiness)
+    return JSONResponse(data)
+
+
 async def account_orders(request):
     account_id = request.path_params['account_id']
     client = _account_or_404(account_id)
@@ -502,6 +533,7 @@ routes = [
     Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),
     Route('/api/fleet-audit', fleet_audit),
+    Route('/api/live-readiness', live_readiness_endpoint),
     Route('/api/market-status', market_status),
     Mount('/static', app=StaticFiles(directory=str(STATIC_DIR)), name='static'),
 ]

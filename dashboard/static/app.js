@@ -97,6 +97,7 @@ async function refresh() {
     renderResearchAgentDecisions(decisions);
     renderInfraIssues(issues);
     renderFleetAudit(fleetAudit);
+    api('/api/live-readiness').then((r) => r.json()).then(renderReadiness).catch(() => {});
     renderMarketStatus(marketStatus);
 
     const accountCalls = [];
@@ -368,6 +369,36 @@ function renderPositions(positions) {
 
 function niceTime(iso) {
   return (iso || '').replace('T', ' ').slice(0, 16);
+}
+
+function renderReadiness(bots) {
+  const list = document.getElementById('readiness-list');
+  list.innerHTML = '';
+  if (!bots || !bots.length) {
+    list.innerHTML = '<div class="decision-item muted">No readiness data.</div>';
+    return;
+  }
+  bots.forEach((b) => {
+    const item = document.createElement('div');
+    item.className = 'decision-item';
+    // 'unproven' is deliberately distinct from 'not ready': nothing has
+    // failed, but something material is unmeasured, and an unmeasured risk
+    // is not an absent one.
+    const badge = b.verdict === 'ready'
+      ? '<span class="badge badge-green">Ready</span>'
+      : b.verdict === 'unproven'
+        ? '<span class="badge badge-gray">Unproven</span>'
+        : '<span class="badge badge-red">Not ready</span>';
+    const rows = (b.criteria || []).map((c) => {
+      const mark = c.status === 'pass' ? '<span class="positive">PASS</span>'
+        : c.status === 'fail' ? '<span class="negative">FAIL</span>'
+        : '<span class="muted">?</span>';
+      return `<div class="muted">${mark} ${escapeHtml(c.name)} — ${escapeHtml(c.detail)}</div>`;
+    }).join('');
+    const blocking = b.blocking ? ` <span class="muted">${b.blocking} blocking</span>` : '';
+    item.innerHTML = `<strong>${escapeHtml(b.bot || '?')}</strong> ${badge}${blocking}${rows}`;
+    list.appendChild(item);
+  });
 }
 
 function renderClosedTrades(trades) {
