@@ -8,6 +8,7 @@ one and a readiness panel that overstates readiness is worse than none.
 
 Run with: python -m unittest tests.test_live_readiness -v
 """
+import json
 import os
 import sqlite3
 import tempfile
@@ -93,7 +94,7 @@ class AssessTests(unittest.TestCase):
         with almost no trades must not look acceptable just because nothing
         has gone wrong yet."""
         self._fill(5, 1.0)
-        r = lr.assess('trading2', config, repo_path=None)
+        r = lr.assess('trading2', config, bug_log_path=None)
         st = self._statuses(r)
         self.assertEqual(st['Sample size'], lr.FAIL)
         self.assertEqual(st['Positive expectancy'], lr.UNKNOWN)
@@ -103,13 +104,13 @@ class AssessTests(unittest.TestCase):
         """No criterion failed, but something material is unmeasured --
         that is 'unproven', and must never read as ready."""
         self._fill(lr.MIN_TRADES, 1.0)
-        r = lr.assess('trading2', config, repo_path=None)  # no repo -> stability unknown
+        r = lr.assess('trading2', config, bug_log_path=None)  # no repo -> stability unknown
         self.assertIn(lr.UNKNOWN, [c['status'] for c in r['criteria']])
         self.assertEqual(r['verdict'], 'unproven')
 
     def test_losing_bot_fails_expectancy(self):
         self._fill(lr.MIN_TRADES, -1.0)
-        st = self._statuses(lr.assess('trading2', config, repo_path=None))
+        st = self._statuses(lr.assess('trading2', config, bug_log_path=None))
         self.assertEqual(st['Positive expectancy'], lr.FAIL)
 
     def test_heavy_day_trading_fails_pdt(self):
@@ -117,12 +118,12 @@ class AssessTests(unittest.TestCase):
         plenty of profitable trades can still be undeployable at small
         equity."""
         self._fill(60, 1.0, overnight=False, span_days=10)
-        st = self._statuses(lr.assess('trading2', config, repo_path=None))
+        st = self._statuses(lr.assess('trading2', config, bug_log_path=None))
         self.assertEqual(st['PDT clearance'], lr.FAIL)
 
     def test_missing_journal_does_not_raise(self):
         config.NOVA_JOURNAL_DB_PATH = '/nonexistent/x.db'
-        r = lr.assess('trading2', config, repo_path=None)
+        r = lr.assess('trading2', config, bug_log_path=None)
         self.assertNotEqual(r['verdict'], 'ready')
 
 
@@ -185,7 +186,7 @@ class SpanTests(unittest.TestCase):
         conn.close()
 
     def _status(self, name):
-        r = lr.assess('trading2', config, repo_path=None)
+        r = lr.assess('trading2', config, bug_log_path=None)
         return {c['name']: c['status'] for c in r['criteria']}[name]
 
     def test_many_trades_crammed_into_a_short_window_fails(self):
@@ -202,7 +203,7 @@ class SpanTests(unittest.TestCase):
         """Few trades over a long period still span the conditions -- the two
         criteria must fail for their own reasons, not each other's."""
         self._fill_over_days(4, span_days=lr.MIN_SPAN_DAYS + 30)
-        r = lr.assess('trading2', config, repo_path=None)
+        r = lr.assess('trading2', config, bug_log_path=None)
         st = {c['name']: c['status'] for c in r['criteria']}
         self.assertEqual(st['Sample spans conditions'], lr.PASS)
         self.assertEqual(st['Sample size'], lr.FAIL)
@@ -210,6 +211,47 @@ class SpanTests(unittest.TestCase):
     def test_single_trade_cannot_define_a_span(self):
         self._fill_over_days(1, span_days=0)
         self.assertEqual(self._status('Sample spans conditions'), lr.UNKNOWN)
+
+
+
+class BugHistoryTests(unittest.TestCase):
+    """The stability criterion previously grepped git for subjects starting
+    with 'Fix' and was wrong in the dangerous direction -- most real fixes
+    here do not say 'Fix', and --grep matches the body too, so Main showed
+    12 days stable when it was 2 and Sofi showed 25. A readiness signal that
+    flatters the bot is worse than no signal."""
+
+    def _log(self, payload):
+        fd, path = tempfile.mkstemp(suffix='.json')
+        with os.fdopen(fd, 'w') as f:
+            json.dump(payload, f)
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def test_uses_the_most_recent_entry_not_the_first(self):
+        from datetime import datetime, timedelta, timezone
+        recent = (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat()
+        path = self._log({'trading2': [{'date': '2020-01-01'}, {'date': recent}]})
+        self.assertEqual(lr._days_since_last_bug('trading2', path), 3)
+
+    def test_missing_bot_is_unknown_not_stable(self):
+        """A bot with no recorded history must not read as having gone a long
+        time without bugs -- absence of evidence is not evidence of absence."""
+        path = self._log({'prod': [{'date': '2026-01-01'}]})
+        self.assertIsNone(lr._days_since_last_bug('trading2', path))
+
+    def test_missing_file_is_unknown(self):
+        self.assertIsNone(lr._days_since_last_bug('trading2', '/nonexistent/bugs.json'))
+
+    def test_malformed_entries_are_skipped_not_fatal(self):
+        from datetime import datetime, timedelta, timezone
+        good = (datetime.now(timezone.utc).date() - timedelta(days=5)).isoformat()
+        path = self._log({'trading2': [{'nope': 1}, {'date': 'not-a-date'}, {'date': good}]})
+        self.assertEqual(lr._days_since_last_bug('trading2', path), 5)
+
+    def test_all_entries_malformed_is_unknown(self):
+        path = self._log({'trading2': [{'date': 'garbage'}]})
+        self.assertIsNone(lr._days_since_last_bug('trading2', path))
 
 
 if __name__ == '__main__':

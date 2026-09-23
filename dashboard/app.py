@@ -293,8 +293,7 @@ def _assess_readiness(account_id):
     it had no criteria to meet.
     """
     try:
-        result = live_readiness.assess(account_id, config,
-                                        config.BOT_REPO_PATHS.get(account_id))
+        result = live_readiness.assess(account_id, config, config.BUG_HISTORY_PATH)
     except Exception as e:
         logger.error(f"[dashboard] Live-readiness assessment failed for {account_id}: {e}")
         return {'bot': BOT_LABELS.get(account_id, account_id), 'verdict': 'unknown',

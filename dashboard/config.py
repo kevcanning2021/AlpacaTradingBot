@@ -89,11 +89,12 @@ CLOSED_TRADES_PATHS = {
 # Each bot's own git repo, read only to date its most recent bug fix as a
 # code-stability signal for the live-readiness panel. Keyed by dashboard
 # account id like CLOSED_TRADES_PATHS above.
-BOT_REPO_PATHS = {
-    'prod': os.getenv('BOT_REPO_MAIN', '/opt/alpaca-bot'),
-    'sofi': os.getenv('BOT_REPO_SOFI', '/opt/sofi-bot'),
-    'trading2': os.getenv('BOT_REPO_NOVA', '/opt/trading-2-0'),
-}
+# Explicit record of when a real bug was last found in each bot's live
+# path, used by the readiness panel's code-stability criterion. Explicit
+# rather than inferred from git: see live_readiness._days_since_last_bug
+# for why grepping commit messages was materially wrong.
+BUG_HISTORY_PATH = os.getenv('BUG_HISTORY_PATH',
+                              os.path.join(os.path.dirname(__file__), 'bug_history.json'))
 
 # Mirrors trader.py's own constants (Main/Sofi's shared codebase) -- these
 # aren't read from either bot's .env (STOP_LOSS_THRESHOLD/TRAILING_STOP_

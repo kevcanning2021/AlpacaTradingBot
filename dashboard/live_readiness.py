@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import sqlite3
-import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -100,27 +99,40 @@ def _max_drawdown(returns):
     return worst
 
 
-def _days_since_last_fix(repo_path):
-    """Days since a commit whose subject begins with 'Fix' landed.
+def _days_since_last_bug(account_id, bug_log_path):
+    """Days since a real bug was last found in this bot's live path.
 
-    A proxy for code stability, and an imperfect one: it counts fixes that
-    were found, which is not the same as bugs that exist. It is still the
-    honest direction to be wrong in -- a bot with a fix landing today has
-    demonstrably just had a bug, whatever else is true.
+    Read from an explicit log rather than inferred from commit messages.
+    The previous version grepped git for subjects starting with 'Fix', and
+    was materially wrong in the dangerous direction: most genuine fixes here
+    do not say 'Fix' ('research_agent: drop price-action keywords', 'Record
+    the actual fill on entry'), and --grep searches the message body too, so
+    it matched commits that were not fixes at all. It reported Main as 12
+    days stable and Sofi as 25 when both were 2.
+
+    There is no reliable lexical signal for 'this commit fixed a bug', so
+    inference was the wrong tool. The cost of being explicit is that it must
+    be maintained -- but a stale entry fails loudly (the date stops moving
+    while bugs keep landing) rather than silently reading as stability.
     """
     try:
-        out = subprocess.run(
-            ['git', '-C', repo_path, 'log', '-1', '--format=%cI', '--grep=^Fix'],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+        with open(bug_log_path) as f:
+            log = json.load(f)
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
+        logger.error(f"[readiness] Could not read bug log at {bug_log_path}: {e}")
         return None
-    if not out:
+    entries = log.get(account_id)
+    if not entries:
         return None
-    try:
-        return (datetime.now(timezone.utc) - datetime.fromisoformat(out)).days
-    except ValueError:
+    dates = []
+    for e in entries:
+        try:
+            dates.append(datetime.fromisoformat(e['date']).date())
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not dates:
         return None
+    return (datetime.now(timezone.utc).date() - max(dates)).days
 
 
 def _pdt_exposure(times):
@@ -140,7 +152,7 @@ def _pdt_exposure(times):
     return worst
 
 
-def assess(account_id, config, repo_path=None):
+def assess(account_id, config, bug_log_path=None):
     returns, times, exit_times = _load_full_history(account_id, config)
     n = len(returns)
     out = []
@@ -199,15 +211,15 @@ def assess(account_id, config, repo_path=None):
         out.append({'name': 'PDT clearance', 'status': UNKNOWN,
                     'detail': 'no entry timestamps recorded, so day trades cannot be counted'})
 
-    days = _days_since_last_fix(repo_path) if repo_path else None
+    days = _days_since_last_bug(account_id, bug_log_path) if bug_log_path else None
     if days is None:
         out.append({'name': 'Code stability', 'status': UNKNOWN,
-                    'detail': 'no fix history available'})
+                    'detail': 'no bug history recorded for this bot'})
     else:
         out.append({
             'name': 'Code stability',
             'status': PASS if days >= STABLE_DAYS_REQUIRED else FAIL,
-            'detail': f'{days} days since the last bug fix landed (need {STABLE_DAYS_REQUIRED})',
+            'detail': f'{days} days since a bug was last found (need {STABLE_DAYS_REQUIRED})',
         })
 
     statuses = [c['status'] for c in out]

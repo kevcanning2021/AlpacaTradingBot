@@ -1,0 +1,37 @@
+{
+  "_README": [
+    "Dates on which a real bug was FOUND in each bot's live path, newest last.",
+    "",
+    "This replaced a git-log heuristic (--grep='^Fix') that was materially",
+    "wrong: most of this project's genuine fixes do not say 'Fix' in the",
+    "subject ('research_agent: drop price-action keywords', 'Record the",
+    "actual fill on entry'), and --grep searches the message BODY too, so it",
+    "also matched commits that were not fixes at all. It reported Main as 12",
+    "days stable and Sofi as 25 when both were 2 -- it flattered the bots,",
+    "which is the worst direction for a readiness signal to be wrong in.",
+    "",
+    "There is no reliable lexical pattern for 'this commit fixed a bug', so",
+    "this is explicit rather than inferred. The cost is that it depends on",
+    "being updated; that is the same discipline LESSONS.md already relies on,",
+    "and a missing entry now fails loudly (stale date) rather than silently",
+    "reading as stability.",
+    "",
+    "Record the date the bug was FOUND, not when the fix shipped -- the",
+    "question is how long the code has gone without a defect surfacing."
+  ],
+  "prod": [
+    {"date": "2026-09-10", "what": "research_agent vetoed on articles that never named the tagged company"},
+    {"date": "2026-09-21", "what": "research_agent price-action keywords ('plunge') blocked entries on bullish articles"}
+  ],
+  "sofi": [
+    {"date": "2026-09-10", "what": "research_agent vetoed on articles that never named the tagged company"},
+    {"date": "2026-09-21", "what": "research_agent price-action keywords ('plunge') blocked entries on bullish articles"}
+  ],
+  "trading2": [
+    {"date": "2026-09-21", "what": "crypto orders sized against buying power, not cash; no per-position notional cap"},
+    {"date": "2026-09-21", "what": "research_agent price-action keywords ('plunge') blocked ETH for 2.5 days"},
+    {"date": "2026-09-22", "what": "crypto symbol-form mismatch orphaned a live position with no stop-loss"},
+    {"date": "2026-09-23", "what": "exit quantity rounded UP, so a triggered stop could not execute for 2 hours"},
+    {"date": "2026-09-23", "what": "entry journalled requested values, never read the actual fill"}
+  ]
+}
