@@ -122,5 +122,27 @@ class AssessTests(unittest.TestCase):
         self.assertNotEqual(r['verdict'], 'ready')
 
 
+
+class AccountScopedWrapperTests(unittest.TestCase):
+    """_assess_readiness wraps assess() for one account. It must degrade to
+    an explicit 'unknown' rather than raising: a panel saying "couldn't
+    evaluate" is useful, a 502 that blanks it is not, and silently omitting
+    the bot would read as though it had no criteria to meet."""
+
+    def test_assessment_failure_returns_unknown_not_an_exception(self):
+        from unittest.mock import patch
+        from dashboard import app
+        with patch.object(app.live_readiness, 'assess', side_effect=RuntimeError('boom')):
+            r = app._assess_readiness('trading2')
+        self.assertEqual(r['verdict'], 'unknown')
+        self.assertEqual(r['criteria'], [])
+        self.assertEqual(r['bot'], 'Nova')
+
+    def test_result_is_labelled_with_the_bot_name(self):
+        from dashboard import app
+        for account_id, label in [('prod', 'Main'), ('sofi', 'Sofi'), ('trading2', 'Nova')]:
+            self.assertEqual(app._assess_readiness(account_id)['bot'], label)
+
+
 if __name__ == '__main__':
     unittest.main()

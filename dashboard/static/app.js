@@ -97,7 +97,6 @@ async function refresh() {
     renderResearchAgentDecisions(decisions);
     renderInfraIssues(issues);
     renderFleetAudit(fleetAudit);
-    api('/api/live-readiness').then((r) => r.json()).then(renderReadiness).catch(() => {});
     renderMarketStatus(marketStatus);
 
     const accountCalls = [];
@@ -107,6 +106,7 @@ async function refresh() {
         api(`/api/accounts/${currentAccount}/positions`).then((r) => r.json()).then(renderPositions),
         api(`/api/accounts/${currentAccount}/orders`).then((r) => r.json()).then(renderOrders),
         api(`/api/accounts/${currentAccount}/trades`).then((r) => r.json()).then(renderClosedTrades),
+        api(`/api/accounts/${currentAccount}/readiness`).then((r) => r.json()).then(renderReadiness),
       );
     }
     await Promise.all(accountCalls);
@@ -371,33 +371,38 @@ function niceTime(iso) {
   return (iso || '').replace('T', ' ').slice(0, 16);
 }
 
-function renderReadiness(bots) {
+function renderReadiness(bot) {
   const list = document.getElementById('readiness-list');
   list.innerHTML = '';
-  if (!bots || !bots.length) {
-    list.innerHTML = '<div class="decision-item muted">No readiness data.</div>';
+  if (!bot || !bot.criteria || !bot.criteria.length) {
+    list.innerHTML = '<div class="decision-item muted">Readiness could not be evaluated.</div>';
     return;
   }
-  bots.forEach((b) => {
-    const item = document.createElement('div');
-    item.className = 'decision-item';
-    // 'unproven' is deliberately distinct from 'not ready': nothing has
-    // failed, but something material is unmeasured, and an unmeasured risk
-    // is not an absent one.
-    const badge = b.verdict === 'ready'
-      ? '<span class="badge badge-green">Ready</span>'
-      : b.verdict === 'unproven'
-        ? '<span class="badge badge-gray">Unproven</span>'
+  // 'unproven' is deliberately distinct from 'not ready': nothing failed,
+  // but something material is unmeasured, and an unmeasured risk is not an
+  // absent one.
+  const badge = bot.verdict === 'ready'
+    ? '<span class="badge badge-green">Ready</span>'
+    : bot.verdict === 'unproven'
+      ? '<span class="badge badge-gray">Unproven</span>'
+      : bot.verdict === 'unknown'
+        ? '<span class="badge badge-gray">Unknown</span>'
         : '<span class="badge badge-red">Not ready</span>';
-    const rows = (b.criteria || []).map((c) => {
-      const mark = c.status === 'pass' ? '<span class="positive">PASS</span>'
-        : c.status === 'fail' ? '<span class="negative">FAIL</span>'
-        : '<span class="muted">?</span>';
-      return `<div class="muted">${mark} ${escapeHtml(c.name)} — ${escapeHtml(c.detail)}</div>`;
-    }).join('');
-    const blocking = b.blocking ? ` <span class="muted">${b.blocking} blocking</span>` : '';
-    item.innerHTML = `<strong>${escapeHtml(b.bot || '?')}</strong> ${badge}${blocking}${rows}`;
-    list.appendChild(item);
+  const head = document.createElement('div');
+  head.className = 'decision-item';
+  const blocking = bot.blocking ? ` <span class="muted">${bot.blocking} blocking</span>` : '';
+  head.innerHTML = `<strong>${escapeHtml(bot.bot || '')}</strong> ${badge}${blocking}`;
+  list.appendChild(head);
+
+  bot.criteria.forEach((c) => {
+    const row = document.createElement('div');
+    row.className = 'decision-item';
+    const mark = c.status === 'pass' ? '<span class="positive">PASS</span>'
+      : c.status === 'fail' ? '<span class="negative">FAIL</span>'
+      : '<span class="muted">?</span>';
+    row.innerHTML = `${mark} <strong>${escapeHtml(c.name)}</strong>`
+      + `<div class="muted">${escapeHtml(c.detail)}</div>`;
+    list.appendChild(row);
   });
 }
 

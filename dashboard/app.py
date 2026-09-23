@@ -281,28 +281,34 @@ LIVE_READINESS_TTL = 300  # criteria move on the scale of days, not seconds
 BOT_LABELS = {'prod': 'Main', 'sofi': 'Sofi', 'trading2': 'Nova'}
 
 
-def _load_live_readiness():
-    """Per-bot readiness for real money, evaluated fresh from each bot's own
-    trade history and repo. Fleet-wide rather than account-scoped (like
-    /api/fleet-audit) because the interesting question is comparative --
-    which bot is closest -- not one bot in isolation. One bot's unreadable
-    history must not take the panel down for the others, so each is
-    independently guarded."""
-    out = []
-    for account_id, label in BOT_LABELS.items():
-        try:
-            result = live_readiness.assess(account_id, config,
-                                            config.BOT_REPO_PATHS.get(account_id))
-        except Exception as e:
-            logger.error(f"[dashboard] Live-readiness assessment failed for {account_id}: {e}")
-            continue
-        result['bot'] = label
-        out.append(result)
-    return out
+def _assess_readiness(account_id):
+    """Readiness for real money for ONE bot, from its own trade history and
+    repo. Account-scoped rather than fleet-wide so it sits with the other
+    per-bot panels (positions, orders, closed trades) and answers "is the
+    bot I'm looking at ready", which is the question actually being asked.
+
+    A failure to assess returns an explicit 'unknown' verdict rather than
+    raising: the panel saying "couldn't evaluate" is useful, a 502 that
+    blanks it is not -- and silently omitting the bot would read as though
+    it had no criteria to meet.
+    """
+    try:
+        result = live_readiness.assess(account_id, config,
+                                        config.BOT_REPO_PATHS.get(account_id))
+    except Exception as e:
+        logger.error(f"[dashboard] Live-readiness assessment failed for {account_id}: {e}")
+        return {'bot': BOT_LABELS.get(account_id, account_id), 'verdict': 'unknown',
+                'blocking': 0, 'criteria': []}
+    result['bot'] = BOT_LABELS.get(account_id, account_id)
+    return result
 
 
-async def live_readiness_endpoint(request):
-    data = await get_or_fetch('fleet', 'live_readiness', LIVE_READINESS_TTL, _load_live_readiness)
+async def account_readiness(request):
+    account_id = request.path_params['account_id']
+    if _account_or_404(account_id) is None:
+        return JSONResponse({'error': 'unknown account'}, status_code=404)
+    data = await get_or_fetch(account_id, 'readiness', LIVE_READINESS_TTL,
+                              lambda: _assess_readiness(account_id))
     return JSONResponse(data)
 
 
@@ -529,11 +535,12 @@ routes = [
     Route('/api/accounts/{account_id}/positions', account_positions),
     Route('/api/accounts/{account_id}/orders', account_orders),
     Route('/api/accounts/{account_id}/trades', closed_trades),
+    Route('/api/accounts/{account_id}/readiness', account_readiness),
     Route('/api/agents-overview', agents_overview),
     Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),
     Route('/api/fleet-audit', fleet_audit),
-    Route('/api/live-readiness', live_readiness_endpoint),
+
     Route('/api/market-status', market_status),
     Mount('/static', app=StaticFiles(directory=str(STATIC_DIR)), name='static'),
 ]
