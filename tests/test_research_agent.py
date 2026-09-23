@@ -311,6 +311,40 @@ class ResearchAgentTests(unittest.TestCase):
         self.assertTrue(result['veto'])
         self.assertIn('crash', result['risk_flags'])
 
+    def test_index_etf_is_not_vetoed_on_a_market_crash_headline(self):
+        """Real bug found live on Nova 2026-09-23: "S&P 500 Will 'Easily'
+        Top 8,000 Before Historic Crash" -- a BULLISH headline -- vetoed
+        SPY. Tagged to SPY alone, so the _INDEX_ETF_TICKERS rule (which
+        needs 2+) never fired. An index fund cannot have a vehicle crash."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="S&P 500 Will 'Easily' Top 8,000 Before Historic Crash",
+            symbols=['SPY'],
+        )]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'SPY'}, client=client)
+        self.assertFalse(result['veto'])
+        self.assertEqual(result['risk_flags'], [])
+
+    def test_company_is_still_vetoed_on_a_vehicle_crash(self):
+        """Why 'crash' was kept -- a real corporate red flag."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline="Musk Says Autopilot Wasn't in Use During Tesla Crash",
+            symbols=['TSLA'],
+        )]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'TSLA'}, client=client)
+        self.assertTrue(result['veto'])
+        self.assertIn('crash', result['risk_flags'])
+
+    def test_index_etf_is_still_vetoed_on_a_real_event_keyword(self):
+        """Only price-action words are skipped for index funds, not every
+        keyword -- otherwise this is a blanket exemption."""
+        client = MagicMock()
+        client.get_news.return_value = [_article(
+            headline='SPY halted amid a real trading halt event', symbols=['SPY'])]
+        result = research_agent.propose({**SIGNAL, 'symbol': 'SPY'}, client=client)
+        self.assertTrue(result['veto'])
+
 
 if __name__ == '__main__':
     unittest.main()

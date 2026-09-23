@@ -127,6 +127,22 @@ _OTHER_COMPANIES_PATTERN = re.compile(r'\band\s+\d+\s+other\b', re.IGNORECASE)
 # alongside them in the real case -- extend if another shows up the same way.
 _INDEX_ETF_TICKERS = {'SPY', 'QQQ', 'IWM', 'DIA'}
 
+# 'crash'/'crashes' survived the price-action purge (see above) because a
+# VEHICLE crash is a real corporate event -- it correctly vetoed TSLA on a
+# fatal Autopilot story. But an index fund cannot have a vehicle crash. When
+# the symbol being checked is itself a broad market index, the word can only
+# mean a MARKET crash, which is price action and usually forecast rather
+# than fact.
+#
+# Found live 2026-09-23, and it exposed a hole in the reasoning used when
+# 'crash' was kept: the claim was that market-crash pieces are covered by
+# _INDEX_ETF_TICKERS. They are only covered when 2+ index ETFs are tagged.
+# "S&P 500 Will 'Easily' Top 8,000 Before Historic Crash" -- a BULLISH
+# headline forecasting a rally first -- was tagged to SPY alone, so it
+# slipped the count rule and vetoed SPY repeatedly. A sibling piece tagged
+# DIA+QQQ+SPY was correctly filtered, which is why the gap was not obvious.
+_PRICE_ACTION_KEYWORDS = {'crash', 'crashes'}
+
 # A fourth, structurally different shape -- found live on Nova 2026-09-10: an
 # article tagged with a SINGLE symbol (META) -- so none of the three checks
 # above even apply -- repeatedly vetoed META on 'resignation'. The article
@@ -228,6 +244,8 @@ def propose(signal: Dict, recent_bars: Optional[List[Dict]] = None, *, client=No
         text = raw_text.lower()
         for keyword, pattern in _KEYWORD_PATTERNS:
             if pattern.search(text):
+                if symbol in _INDEX_ETF_TICKERS and keyword in _PRICE_ACTION_KEYWORDS:
+                    continue  # an index fund cannot have a vehicle crash -- see _PRICE_ACTION_KEYWORDS
                 matched.append((keyword, article.get('headline', '')))
                 break  # one match is enough to flag this article
 
