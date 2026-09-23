@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 MIN_TRADES = 100          # sample needed before expectancy means much
 MIN_FOR_STATS = 30        # below this, don't even report an expectancy
 STABLE_DAYS_REQUIRED = 30  # consecutive days with no bug fix landing
+# Trade COUNT alone is a crude proxy for evidence. 100 trades from a bot
+# that trades 19x a week span about five weeks -- essentially one market
+# regime -- while 100 from a bot trading 0.7x a week span two and a half
+# years and many. Counting trades treats those as equivalent evidence when
+# they plainly are not. Requiring a calendar span as well deliberately makes
+# the bar HARDER for the fast bot, which is the honest direction: the fast
+# bot is the one whose sample was being flattered.
+MIN_SPAN_DAYS = 56  # 8 weeks -- more than one market mood, still reachable
 PDT_EQUITY_FLOOR = 25_000  # US pattern-day-trader threshold
 PDT_DAY_TRADES_ALLOWED = 3  # per rolling 5 business days below that floor
 
@@ -36,17 +44,27 @@ PASS, FAIL, UNKNOWN = 'pass', 'fail', 'unknown'
 def _load_full_history(account_id, config):
     """Every closed trade, not the capped slice the Closed Trades panel uses.
 
-    Returns (list_of_returns_as_fractions, list_of_(entry,exit)_datetimes).
-    Entry times are only available for Nova; the others record exits only,
-    which is what makes their PDT exposure unknowable.
+    Returns (returns_as_fractions, (entry,exit) pairs, exit_times).
+
+    Entry times are only available for Nova, which is what makes the others'
+    PDT exposure unknowable -- but EXIT times exist everywhere, so the
+    calendar span of the sample can be measured for all three.
     """
     if account_id in config.CLOSED_TRADES_PATHS:
         try:
             with open(config.CLOSED_TRADES_PATHS[account_id]) as f:
                 history = json.load(f)
         except (FileNotFoundError, OSError, json.JSONDecodeError):
-            return [], []
-        return [t['pnl_pct'] for t in history if t.get('pnl_pct') is not None], []
+            return [], [], []
+        returns, exits = [], []
+        for t in history:
+            if t.get('pnl_pct') is not None:
+                returns.append(t['pnl_pct'])
+            try:
+                exits.append(datetime.fromisoformat(t['timestamp']))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return returns, [], exits
 
     if account_id == 'trading2':
         try:
@@ -56,19 +74,20 @@ def _load_full_history(account_id, config):
                     'FROM trades WHERE exit_time IS NOT NULL ORDER BY exit_time'
                 ).fetchall()
         except (sqlite3.Error, OSError):
-            return [], []
-        returns, times = [], []
+            return [], [], []
+        returns, times, exits = [], [], []
         for entry_time, exit_time, pnl, qty, entry_price in rows:
             cost = (qty or 0) * (entry_price or 0)
             if cost and pnl is not None:
                 returns.append(pnl / cost)
             try:
                 times.append((datetime.fromisoformat(entry_time), datetime.fromisoformat(exit_time)))
+                exits.append(datetime.fromisoformat(exit_time))
             except (TypeError, ValueError):
                 continue
-        return returns, times
+        return returns, times, exits
 
-    return [], []
+    return [], [], []
 
 
 def _max_drawdown(returns):
@@ -122,7 +141,7 @@ def _pdt_exposure(times):
 
 
 def assess(account_id, config, repo_path=None):
-    returns, times = _load_full_history(account_id, config)
+    returns, times, exit_times = _load_full_history(account_id, config)
     n = len(returns)
     out = []
 
@@ -131,6 +150,22 @@ def assess(account_id, config, repo_path=None):
         'status': PASS if n >= MIN_TRADES else FAIL,
         'detail': f'{n} closed trades (need {MIN_TRADES})',
     })
+
+    # Deliberately separate from sample size rather than folded into it, so
+    # a bot that has the trades but not the elapsed time is visibly short on
+    # the thing it is actually short on.
+    if len(exit_times) >= 2:
+        span_days = (max(exit_times) - min(exit_times)).days
+        out.append({
+            'name': 'Sample spans conditions',
+            'status': PASS if span_days >= MIN_SPAN_DAYS else FAIL,
+            'detail': f'{span_days} days from first to latest closed trade '
+                       f'(need {MIN_SPAN_DAYS}; trades from one market mood are not '
+                       f'independent evidence)',
+        })
+    else:
+        out.append({'name': 'Sample spans conditions', 'status': UNKNOWN,
+                    'detail': 'need at least two closed trades to measure a span'})
 
     if n < MIN_FOR_STATS:
         out.append({'name': 'Positive expectancy', 'status': UNKNOWN,

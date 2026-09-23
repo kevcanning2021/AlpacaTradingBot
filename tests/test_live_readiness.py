@@ -68,15 +68,19 @@ class AssessTests(unittest.TestCase):
         config.NOVA_JOURNAL_DB_PATH = self._orig_db
         os.unlink(self.db)
 
-    def _fill(self, n, pnl, overnight=True):
+    def _fill(self, n, pnl, overnight=True, span_days=90):
+        """span_days defaults comfortably above MIN_SPAN_DAYS so tests about
+        OTHER criteria are not incidentally failed by the span one. The PDT
+        test overrides it downward, since day trades only breach the limit
+        when they cluster inside a rolling window."""
+        from datetime import datetime, timedelta, timezone
+        base = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
         conn = sqlite3.connect(self.db)
         rows = []
         for i in range(n):
-            day = (i % 25) + 1
-            entry = f'2026-09-{day:02d}T10:00:00+00:00'
-            exit_ = f'2026-09-{(day if not overnight else day) :02d}T15:00:00+00:00' if not overnight \
-                else f'2026-10-{day:02d}T15:00:00+00:00'
-            rows.append((entry, exit_, pnl, 1.0, 100.0))
+            entry = base + timedelta(days=(span_days * i) // max(n - 1, 1))
+            exit_ = entry + (timedelta(days=1) if overnight else timedelta(hours=5))
+            rows.append((entry.isoformat(), exit_.isoformat(), pnl, 1.0, 100.0))
         conn.executemany('INSERT INTO trades VALUES (?,?,?,?,?)', rows)
         conn.commit()
         conn.close()
@@ -112,7 +116,7 @@ class AssessTests(unittest.TestCase):
         """The blocker that is regulatory rather than performance-based:
         plenty of profitable trades can still be undeployable at small
         equity."""
-        self._fill(60, 1.0, overnight=False)
+        self._fill(60, 1.0, overnight=False, span_days=10)
         st = self._statuses(lr.assess('trading2', config, repo_path=None))
         self.assertEqual(st['PDT clearance'], lr.FAIL)
 
@@ -142,6 +146,70 @@ class AccountScopedWrapperTests(unittest.TestCase):
         from dashboard import app
         for account_id, label in [('prod', 'Main'), ('sofi', 'Sofi'), ('trading2', 'Nova')]:
             self.assertEqual(app._assess_readiness(account_id)['bot'], label)
+
+
+
+class SpanTests(unittest.TestCase):
+    """Trade count alone treats 100 trades from five weeks and 100 from two
+    years as equivalent evidence. They are not -- the first is essentially
+    one market regime. This criterion exists to make the FAST bot's bar
+    harder, which is the honest direction, since the fast bot is the one
+    whose sample was being flattered."""
+
+    def setUp(self):
+        self._orig = config.NOVA_JOURNAL_DB_PATH
+        fd, self.db = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        conn = sqlite3.connect(self.db)
+        conn.execute('CREATE TABLE trades (entry_time TEXT, exit_time TEXT, pnl_dollars REAL, '
+                     'quantity REAL, entry_price REAL)')
+        conn.commit()
+        conn.close()
+        config.NOVA_JOURNAL_DB_PATH = self.db
+
+    def tearDown(self):
+        config.NOVA_JOURNAL_DB_PATH = self._orig
+        os.unlink(self.db)
+
+    def _fill_over_days(self, n, span_days):
+        from datetime import datetime, timedelta
+        base = datetime(2026, 1, 1)
+        conn = sqlite3.connect(self.db)
+        rows = []
+        for i in range(n):
+            # spread evenly across the requested span
+            d = base + timedelta(days=(span_days * i) // max(n - 1, 1))
+            rows.append((d.isoformat(), (d + timedelta(hours=2)).isoformat(), 1.0, 1.0, 100.0))
+        conn.executemany('INSERT INTO trades VALUES (?,?,?,?,?)', rows)
+        conn.commit()
+        conn.close()
+
+    def _status(self, name):
+        r = lr.assess('trading2', config, repo_path=None)
+        return {c['name']: c['status'] for c in r['criteria']}[name]
+
+    def test_many_trades_crammed_into_a_short_window_fails(self):
+        """The case that motivated this: plenty of trades, but all from one
+        market mood, so they are not independent evidence."""
+        self._fill_over_days(200, span_days=20)
+        self.assertEqual(self._status('Sample spans conditions'), lr.FAIL)
+
+    def test_a_long_enough_span_passes(self):
+        self._fill_over_days(200, span_days=lr.MIN_SPAN_DAYS + 10)
+        self.assertEqual(self._status('Sample spans conditions'), lr.PASS)
+
+    def test_span_is_independent_of_count(self):
+        """Few trades over a long period still span the conditions -- the two
+        criteria must fail for their own reasons, not each other's."""
+        self._fill_over_days(4, span_days=lr.MIN_SPAN_DAYS + 30)
+        r = lr.assess('trading2', config, repo_path=None)
+        st = {c['name']: c['status'] for c in r['criteria']}
+        self.assertEqual(st['Sample spans conditions'], lr.PASS)
+        self.assertEqual(st['Sample size'], lr.FAIL)
+
+    def test_single_trade_cannot_define_a_span(self):
+        self._fill_over_days(1, span_days=0)
+        self.assertEqual(self._status('Sample spans conditions'), lr.UNKNOWN)
 
 
 if __name__ == '__main__':
