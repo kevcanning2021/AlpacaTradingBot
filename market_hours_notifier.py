@@ -5,9 +5,12 @@ shift with DST and holidays (half-days, full closures), and the official
 /clock endpoint already accounts for all of that. Run this frequently via
 cron (every 5 min) during the hours the market could plausibly be open or
 about to open; it's a no-op every run except the one where is_open actually
-flips, detected via a tiny state file (STATE_PATH) so a restart or a missed
-run can't cause a duplicate or a skipped notification -- the next run just
-compares against the last known state again.
+flips, detected via a tiny state file (STATE_PATH) so a restart, a missed run
+or a failed send can't cause a skipped notification -- the next run just
+compares against the last known state again. State is written only after the
+announcement actually goes out, which is what makes that retry work; see the
+comment at the end of main() for the duplicate-vs-missing trade-off that
+ordering deliberately takes.
 
 Fleet-wide, not bot-specific: lives on Main only (it already has Telegram
 credentials) since NYSE market hours apply to Main and Sofi alike, and Nova
@@ -47,9 +50,9 @@ def main() -> None:
     is_open = clock['is_open']
 
     last_state = _load_last_state()
-    _save_state(is_open)
 
     if last_state is None or last_state == is_open:
+        _save_state(is_open)
         return  # first run ever, or no transition -- nothing to announce
 
     notifier = TelegramNotifier()
@@ -57,6 +60,20 @@ def main() -> None:
         notifier.send("Market is open", f"NYSE regular session started. Closes at {clock['next_close']}.")
     else:
         notifier.send("Market is closed", f"NYSE regular session ended. Next open: {clock['next_open']}.")
+
+    # Record the transition ONLY once it has actually been announced.
+    # TelegramNotifier.send() raises on any non-200, and this used to save
+    # state before calling it -- so a single transient Telegram failure
+    # advanced the state past an announcement that never went out, and the
+    # next run saw no transition to report. That silently lost the ping
+    # entirely, which is the one failure mode the state file exists to
+    # prevent. Found 2026-09-23 while auditing cron logs full of transient
+    # Alpaca 500s: the same flakiness plainly reaches Telegram too.
+    #
+    # The deliberate trade: if the process dies between a successful send and
+    # this write, the next run re-announces the same transition. A duplicate
+    # ping is a far cheaper error than a missing one.
+    _save_state(is_open)
 
 
 if __name__ == '__main__':

@@ -342,3 +342,21 @@ gets them, not just whoever's driving a particular session.
    statements. Coverage measures what is tested, not what is needed: treat
    a gap as a question (why does nothing exercise this?) rather than an
    instruction to write a test.
+
+32. **Write the state that records an event only AFTER the event has
+   actually happened -- ordering is the whole guarantee.**
+   market_hours_notifier used a state file so that a crashed or missed
+   cron run could never skip a market open/close ping: the next run just
+   re-compares against the last known state. But main() saved the new
+   state BEFORE calling notifier.send(), and TelegramNotifier.send()
+   raises on any non-200. So a single transient Telegram failure advanced
+   the state past an announcement that never went out, every later run saw
+   no transition, and the ping was lost permanently -- the exact failure
+   the state file existed to prevent. The module docstring confidently
+   claimed a missed run "can't cause a skipped notification", which is
+   why it went unexamined for so long: the design was right and only the
+   two lines' order was wrong. Persisting "I did X" before doing X turns
+   a retry mechanism into a silencer. Save after, and accept that a crash
+   in the gap repeats the action -- for a notification, a duplicate is far
+   cheaper than a silent loss, and that trade should be stated in the code
+   rather than left implicit.

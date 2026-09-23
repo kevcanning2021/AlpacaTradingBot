@@ -81,6 +81,71 @@ class MarketHoursNotifierTests(unittest.TestCase):
 
         mock_notifier.send.assert_not_called()  # unknown prior state -> treated like first run
 
+    def test_failed_send_does_not_advance_state(self):
+        """The bug this file exists to prevent, found live 2026-09-23.
+
+        TelegramNotifier.send() RAISES on any non-200, and main() used to
+        save state before calling it. One transient Telegram failure
+        therefore advanced the state past an announcement that never went
+        out, and every later run saw last_state == is_open and stayed
+        silent -- the ping was lost for good, not merely delayed.
+
+        Leaving the state untouched on failure is what makes the retry on
+        the next cron run possible."""
+        with open(self.state_path, 'w') as f:
+            json.dump({'is_open': False}, f)
+
+        mock_client = MagicMock()
+        mock_client.get_clock.return_value = {
+            'is_open': True, 'next_open': '', 'next_close': '',
+        }
+        mock_notifier = MagicMock()
+        mock_notifier.send.side_effect = Exception('Telegram returned HTTP 500')
+
+        with patch.object(mhn, 'AlpacaClient', return_value=mock_client),              patch.object(mhn, 'TelegramNotifier', return_value=mock_notifier):
+            with self.assertRaises(Exception):
+                mhn.main()
+
+        with open(self.state_path) as f:
+            self.assertEqual(json.load(f), {'is_open': False},
+                              'state advanced despite the notification failing')
+
+    def test_transition_is_retried_on_the_next_run_after_a_failure(self):
+        """The half that actually matters to the user: not just that state
+        held, but that the ping genuinely still arrives afterwards."""
+        with open(self.state_path, 'w') as f:
+            json.dump({'is_open': False}, f)
+
+        mock_client = MagicMock()
+        mock_client.get_clock.return_value = {
+            'is_open': True, 'next_open': '', 'next_close': '',
+        }
+        failing = MagicMock()
+        failing.send.side_effect = Exception('Telegram returned HTTP 500')
+        with patch.object(mhn, 'AlpacaClient', return_value=mock_client),              patch.object(mhn, 'TelegramNotifier', return_value=failing):
+            with self.assertRaises(Exception):
+                mhn.main()
+
+        recovered, state = self._run(is_open=True)  # next cron run, Telegram back
+        recovered.send.assert_called_once()
+        self.assertIn('open', recovered.send.call_args[0][0].lower())
+        self.assertEqual(state, {'is_open': True})
+
+    def test_clock_failure_leaves_state_untouched(self):
+        """A failing /clock must not be mistaken for a market state. The
+        cron log is full of transient Alpaca 500s on exactly this call."""
+        with open(self.state_path, 'w') as f:
+            json.dump({'is_open': False}, f)
+
+        mock_client = MagicMock()
+        mock_client.get_clock.side_effect = Exception('Failed to get clock: 500')
+        with patch.object(mhn, 'AlpacaClient', return_value=mock_client),              patch.object(mhn, 'TelegramNotifier', return_value=MagicMock()):
+            with self.assertRaises(Exception):
+                mhn.main()
+
+        with open(self.state_path) as f:
+            self.assertEqual(json.load(f), {'is_open': False})
+
 
 if __name__ == '__main__':
     unittest.main()
