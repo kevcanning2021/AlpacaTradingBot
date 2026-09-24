@@ -44,6 +44,10 @@
     {
       "date": "2026-09-23",
       "what": "market_hours_notifier saved its state file BEFORE sending the Telegram ping, so one transient send failure lost an open/close notification permanently (notification path, not the trading path)"
+    },
+    {
+      "date": "2026-09-24",
+      "what": "Stops are enforced by the 60s poll loop, not resting at the broker, so 89% of losing trades exit BEYOND their stop -- mean 1.61x planned risk (median 1.14x, worst 7.94x). The bot's stated 0.5% risk per trade is therefore wrong by ~61%, and break-even win rate rises from 35.7% to 47.2% against an observed 41.7%. Found at size on nova-main day one."
     }
   ],
   "sofi": [
@@ -84,6 +88,10 @@
     {
       "date": "2026-09-23",
       "what": "research_agent 'crash' vetoed index ETFs on bullish market-crash headlines; _INDEX_ETF_TICKERS needs 2+ tags and this was tagged to SPY alone"
+    },
+    {
+      "date": "2026-09-24",
+      "what": "Stops are enforced by the 60s poll loop, not resting at the broker, so 89% of losing trades exit BEYOND their stop -- mean 1.61x planned risk (median 1.14x, worst 7.94x). The bot's stated 0.5% risk per trade is therefore wrong by ~61%, and break-even win rate rises from 35.7% to 47.2% against an observed 41.7%. Found at size on nova-main day one."
     }
   ]
 }

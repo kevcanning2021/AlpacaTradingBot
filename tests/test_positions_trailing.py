@@ -90,12 +90,23 @@ class AccountPositionsEnrichmentTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._orig_peak_paths = dict(config.PEAK_PRICES_PATHS)
         self._orig_journal_path = config.NOVA_JOURNAL_DB_PATH
+        self._orig_main_journal = config.MAIN_JOURNAL_DB_PATH
+        # Point BOTH journals at nothing by default. Until 2026-09-23 'prod'
+        # had no journal at all, so these tests were isolated by accident;
+        # the moment Main gained one they silently began reading the LIVE
+        # production database, and a test asserting "no stop_price here"
+        # started failing because a real open MSFT trade happened to exist.
+        # A test that passes only while a path is unconfigured is not
+        # isolated, it is lucky.
+        config.NOVA_JOURNAL_DB_PATH = '/nonexistent/nova.db'
+        config.MAIN_JOURNAL_DB_PATH = '/nonexistent/main.db'
         cache._store.clear()
 
     def tearDown(self):
         config.PEAK_PRICES_PATHS.clear()
         config.PEAK_PRICES_PATHS.update(self._orig_peak_paths)
         config.NOVA_JOURNAL_DB_PATH = self._orig_journal_path
+        config.MAIN_JOURNAL_DB_PATH = self._orig_main_journal
         cache._store.clear()
 
     async def test_main_position_gets_peak_and_trailing_stop_fields(self):
