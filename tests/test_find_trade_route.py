@@ -13,6 +13,11 @@ from unittest.mock import MagicMock, patch
 from dashboard import app, config
 
 
+# Any account that is NOT the one carrying the button. Derived rather than
+# written down, so these stay correct wherever the button is pointed.
+_OTHER_ACCOUNT = 'sofi' if config.FIND_TRADE_ACCOUNT != 'sofi' else 'prod'
+
+
 def _req(account_id, body=None, ip='10.0.0.1'):
     r = MagicMock()
     r.path_params = {'account_id': account_id}
@@ -30,7 +35,7 @@ class FindTradeStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_never_run_reads_as_idle_not_an_error(self):
         with patch.object(config, 'FIND_TRADE_STATE_PATH', '/nonexistent/x.json'), \
              patch.object(app, '_find_trade_unit_active', return_value=False):
-            r = await app.find_trade_status(_req('sofi'))
+            r = await app.find_trade_status(_req(config.FIND_TRADE_ACCOUNT))
         self.assertEqual(json.loads(r.body)['status'], 'idle')
 
     async def test_a_finished_run_is_reported_verbatim(self):
@@ -40,7 +45,7 @@ class FindTradeStatusTests(unittest.IsolatedAsyncioTestCase):
             path = f.name
         with patch.object(config, 'FIND_TRADE_STATE_PATH', path), \
              patch.object(app, '_find_trade_unit_active', return_value=False):
-            body = json.loads((await app.find_trade_status(_req('sofi'))).body)
+            body = json.loads((await app.find_trade_status(_req(config.FIND_TRADE_ACCOUNT))).body)
         self.assertEqual(body['symbol'], 'AAPL')
         self.assertTrue(body['traded'])
         self.assertFalse(body['running'])
@@ -54,12 +59,12 @@ class FindTradeStatusTests(unittest.IsolatedAsyncioTestCase):
             path = f.name
         with patch.object(config, 'FIND_TRADE_STATE_PATH', path), \
              patch.object(app, '_find_trade_unit_active', return_value=False):
-            body = json.loads((await app.find_trade_status(_req('sofi'))).body)
+            body = json.loads((await app.find_trade_status(_req(config.FIND_TRADE_ACCOUNT))).body)
         self.assertEqual(body['status'], 'failed')
         self.assertIn('try again', body['message'].lower())
 
     async def test_another_account_has_no_such_button(self):
-        r = await app.find_trade_status(_req('prod'))
+        r = await app.find_trade_status(_req(_OTHER_ACCOUNT))
         self.assertEqual(r.status_code, 404)
 
 
@@ -68,7 +73,7 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
         """Guards the worst outcome available here: trading the $100k balance
         because a path parameter was wrong."""
         with patch.object(app.subprocess, 'run') as run:
-            r = await app.find_trade_trigger(_req('prod', {'password': 'x'}))
+            r = await app.find_trade_trigger(_req(_OTHER_ACCOUNT, {'password': 'x'}))
         self.assertEqual(r.status_code, 404)
         run.assert_not_called()
 
@@ -77,7 +82,7 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(app.auth, 'verify_password', return_value=False), \
              patch.object(app.auth, 'record_failed_attempt') as rec, \
              patch.object(app.subprocess, 'run') as run:
-            r = await app.find_trade_trigger(_req('sofi', {'password': 'wrong'}))
+            r = await app.find_trade_trigger(_req(config.FIND_TRADE_ACCOUNT, {'password': 'wrong'}))
         self.assertEqual(r.status_code, 401)
         run.assert_not_called()
         rec.assert_called_once()
@@ -88,14 +93,14 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(app.auth, 'verify_password', return_value=False), \
              patch.object(app.auth, 'record_failed_attempt'), \
              patch.object(app.subprocess, 'run') as run:
-            r = await app.find_trade_trigger(_req('sofi', body=None))
+            r = await app.find_trade_trigger(_req(config.FIND_TRADE_ACCOUNT, body=None))
         self.assertEqual(r.status_code, 401)
         run.assert_not_called()
 
     async def test_rate_limiting_applies_before_the_password_is_checked(self):
         with patch.object(app.auth, 'check_rate_limit', return_value=False), \
              patch.object(app.subprocess, 'run') as run:
-            r = await app.find_trade_trigger(_req('sofi', {'password': 'x'}))
+            r = await app.find_trade_trigger(_req(config.FIND_TRADE_ACCOUNT, {'password': 'x'}))
         self.assertEqual(r.status_code, 429)
         run.assert_not_called()
 
@@ -104,7 +109,7 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(app.auth, 'verify_password', return_value=True), \
              patch.object(app, '_find_trade_unit_active', return_value=True), \
              patch.object(app.subprocess, 'run') as run:
-            r = await app.find_trade_trigger(_req('sofi', {'password': 'ok'}))
+            r = await app.find_trade_trigger(_req(config.FIND_TRADE_ACCOUNT, {'password': 'ok'}))
         self.assertEqual(r.status_code, 409)
         run.assert_not_called()
 
@@ -116,7 +121,7 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(app, '_find_trade_unit_active', return_value=False), \
              patch.object(app.subprocess, 'run',
                           return_value=MagicMock(returncode=0, stderr='')) as run:
-            r = await app.find_trade_trigger(_req('sofi', {'password': 'ok'}))
+            r = await app.find_trade_trigger(_req(config.FIND_TRADE_ACCOUNT, {'password': 'ok'}))
         self.assertEqual(json.loads(r.body)['ok'], True)
         self.assertEqual(run.call_args[0][0],
                          ['sudo', '-n', 'systemctl', '--no-block', 'start', config.FIND_TRADE_UNIT])
@@ -127,7 +132,7 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(app, '_find_trade_unit_active', return_value=False), \
              patch.object(app.subprocess, 'run',
                           return_value=MagicMock(returncode=1, stderr='no sudo')):
-            r = await app.find_trade_trigger(_req('sofi', {'password': 'ok'}))
+            r = await app.find_trade_trigger(_req(config.FIND_TRADE_ACCOUNT, {'password': 'ok'}))
         self.assertEqual(r.status_code, 502)
 
 

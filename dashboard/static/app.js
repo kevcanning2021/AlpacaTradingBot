@@ -104,19 +104,15 @@ async function refresh() {
         api(`/api/accounts/${currentAccount}/trades`).then((r) => r.json()).then(renderClosedTrades),
         api(`/api/accounts/${currentAccount}/readiness`).then((r) => r.json()).then(renderReadiness),
       );
-      if (currentAccount === FIND_TRADE_ACCOUNT) {
-        accountCalls.push(
-          api(`/api/accounts/${currentAccount}/find-trade-status`)
-            .then((r) => r.json()).then(renderFindTrade),
-        );
-      } else {
-        // Re-hide on every other account. The card is only unhidden by
-        // renderFindTrade, so without this it would stay visible after
-        // switching tabs -- offering a Sofi-only control while the $100k
-        // account is on screen.
-        const card = document.getElementById('find-trade-card');
-        if (card) card.classList.add('hidden');
-      }
+      // The backend owns which account has the button (config.FIND_TRADE_ACCOUNT)
+      // and 404s for every other one. Asking it beats keeping a second copy of
+      // the account id here: the button moved from sofi to prod on 2026-09-24,
+      // and a hardcoded constant in this file would have gone on pointing at
+      // the old account while the server pointed at the new one.
+      accountCalls.push(
+        api(`/api/accounts/${currentAccount}/find-trade-status`)
+          .then((r) => (r.ok ? r.json().then(renderFindTrade) : hideFindTrade())),
+      );
     }
     await Promise.all(accountCalls);
     banner.classList.add('hidden');
@@ -130,7 +126,10 @@ async function refresh() {
 // read-only, which is why this one re-asks for the password rather than
 // trusting the session cookie alone: a stolen or replayed cookie should not
 // be able to start a trading session by itself.
-const FIND_TRADE_ACCOUNT = 'sofi';
+function hideFindTrade() {
+  const card = document.getElementById('find-trade-card');
+  if (card) card.classList.add('hidden');
+}
 
 function renderFindTrade(state) {
   const card = document.getElementById('find-trade-card');
@@ -196,7 +195,7 @@ function wireFindTrade() {
     err.textContent = '';
     go.disabled = true;
     try {
-      const res = await api(`/api/accounts/${FIND_TRADE_ACCOUNT}/find-trade`, {
+      const res = await api(`/api/accounts/${currentAccount}/find-trade`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: pw.value }),
