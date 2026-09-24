@@ -102,30 +102,74 @@ AGENT_REVIEW_QUEUE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    'agent_review_queue.jsonl')
 
 
-def is_advisory(key):
-    """True for alert classes that describe something to REVIEW, not something
-    breaking right now.
+# A downed service is fixed by the agent sweep within ~15 min. Escalating on
+# FIRST detection would put an error in front of the user that was about to be
+# resolved without them -- which is exactly the thing they asked to stop
+# happening. Three watchdog cycles is long enough that if it is still down,
+# automation has genuinely failed and a human is the right next step.
+ESCALATE_AFTER_MINUTES = 45
 
-    These get announced once and then stay quiet while their message is
-    unchanged, instead of re-pinging every ALERT_COOLDOWN_SECONDS. They remain
-    in active_alerts and on the dashboard throughout -- visibility is not the
-    thing being reduced, repetition is.
+
+def is_advisory(key):
+    """True for alert classes that never warrant waking the user.
+
+    These announce ONCE to the agent queue while their message is unchanged,
+    rather than re-pinging every ALERT_COOLDOWN_SECONDS. They stay in
+    active_alerts and on the dashboard throughout -- visibility is not what is
+    being reduced, repetition is.
 
     Why (2026-09-24): four stuck_veto alerts were live at once, three of them
-    for entirely correct vetoes (a genuine Tesla lawsuit story, counted twice
-    because Nova and nova-main run the same code against different accounts)
-    and one for a stale article already fixed in code. At a 2h cooldown that
-    is ~48 identical Telegram messages a day, none of which needed an action.
-    The user's report was "lots of errors" -- which was a fair description of
-    the inbox, and a completely wrong description of the fleet. An alert
-    channel that cries wolf hourly is worse than one that stays silent,
-    because the ONE message that matters arrives looking exactly like the
-    forty-seven that did not.
+    for entirely correct vetoes, which at a 2h cooldown is ~48 identical
+    Telegram messages a day needing no action. The user reported "lots of
+    errors"; the fleet was healthy. An alert channel that cries wolf hourly is
+    worse than one that stays silent, because the one message that matters
+    arrives looking exactly like the forty-seven that did not.
 
-    service_down, secrets-hygiene and account-level alerts are deliberately
-    NOT advisory: those are worth nagging about until someone acts.
+    bot_order belongs here despite not being an error at all: it fires on
+    EVERY order the bot places, and with three bots trading that is pure
+    volume. Normal trading activity belongs on the dashboard, not in an alert
+    channel. watchdog_internal_error belongs here because a broken check is
+    the agent's problem to fix, not the account owner's to be told about.
     """
-    return key.startswith(('log_errors:', 'git_drift:', 'stale_code:')) or ':stuck_veto:' in key
+    return (key.startswith(('log_errors:', 'git_drift:', 'stale_code:',
+                             'watchdog_internal_error:'))
+            or ':stuck_veto:' in key
+            or ':bot_order:' in key
+            or ':api_error:' in key
+            or ':research_agent_read_error' in key
+            or ':not_configured' in key)
+
+
+def alert_reaches_user(key, first_seen=None, now=None):
+    """Whether this alert goes to Telegram, or only to the agent queue.
+
+    Deliberately narrow. The standing instruction from the user (2026-09-24)
+    is that they should never be the fleet's error-reporting channel: errors
+    are the agent's to fix or to carry. What survives here is only what a
+    human genuinely has to decide or act on, and what cannot wait for the next
+    agent sweep.
+
+    - Credentials and unattributed orders: a leaked key or an order that did
+      not come from this account's own key cannot wait, and no amount of
+      automatic restarting addresses either.
+    - A breached stop is money moving the wrong way right now.
+    - A downed service escalates only after ESCALATE_AFTER_MINUTES, giving the
+      sweep time to restart it first. If it is still down by then, restarting
+      is not the answer and a human is.
+    """
+    if (key.startswith(('leaked_credential:', 'secrets_hygiene:'))
+            or ':unattributed_order:' in key
+            or ':stop_loss_breach:' in key):
+        return True
+    if key.startswith('service_down:'):
+        if not first_seen:
+            return False
+        try:
+            age_min = (now - datetime.fromisoformat(first_seen)).total_seconds() / 60
+        except (TypeError, ValueError, AttributeError):
+            return False
+        return age_min >= ESCALATE_AFTER_MINUTES
+    return False
 
 
 # How far back a log error keeps an alert alive. Added 2026-09-21 after a
@@ -837,11 +881,11 @@ def main():
             # alerts go only to the agent queue; urgent ones go to both, so a
             # genuinely broken bot still reaches a human immediately even if
             # no agent session is running.
-            if is_advisory(key):
-                queued.append(('advisory', key, line))
-            else:
+            if alert_reaches_user(key, first_seen=first_seen, now=now):
                 messages.append(line)
                 queued.append(('urgent', key, line))
+            else:
+                queued.append(('advisory', key, line))
             last_alert_at = now.isoformat()
         active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg, 'bot': bot_for_key(key)}
 

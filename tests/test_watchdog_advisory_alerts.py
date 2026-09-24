@@ -1,75 +1,101 @@
-"""Advisory alerts announce once, then stay quiet until something changes.
+"""Who hears about an alert: the user, or only the agent queue?
 
-Written 2026-09-24 after the user reported "lots of errors". The fleet was
-fine: four stuck_veto alerts were live, three for entirely correct vetoes
-(a real Tesla lawsuit story, counted twice because Nova and nova-main run
-the same code against different accounts) and one for a stale article
-already fixed. At a 2h cooldown that is ~48 identical Telegram messages a
-day, none needing any action. The inbox, not the fleet, was the problem.
+Standing instruction from the user, 2026-09-24: they are never to be the
+fleet's error-reporting channel. Errors are the agent's to fix or to carry.
+What reaches a phone is only what a human must decide or act on, and cannot
+wait for the next sweep.
+
+The trigger was ~48 identical Telegram messages a day from four stuck_veto
+alerts, three of them for entirely CORRECT vetoes. The fleet was healthy and
+the inbox said otherwise.
 """
 import unittest
+from datetime import datetime, timedelta, timezone
 
 import watchdog
 
 
 class IsAdvisoryTests(unittest.TestCase):
+    """Advisory = announce once while unchanged, never urgent."""
+
     def test_review_grade_alerts_are_advisory(self):
         for key in ('log_errors:trading-2-0.service',
                     'git_drift:alpaca-bot',
                     'stale_code:nova-main.service',
                     'trading2:stuck_veto:SPY',
-                    'production:stuck_veto:TSLA'):
+                    'production:stuck_veto:TSLA',
+                    'trading2:api_error:orders',
+                    'trading2:research_agent_read_error',
+                    'sofi:not_configured'):
             self.assertTrue(watchdog.is_advisory(key), key)
 
-    def test_urgent_alerts_keep_nagging(self):
-        """A dead service or a leaked credential SHOULD keep pinging until
-        someone acts -- quieting those would be the opposite of the fix."""
+    def test_a_normal_trade_is_advisory(self):
+        """bot_order fires on EVERY order placed. With three bots trading,
+        routing that to a phone is pure volume -- and it is not an error at
+        all. Normal activity belongs on the dashboard."""
+        self.assertTrue(watchdog.is_advisory('trading2:bot_order:abc123'))
+
+    def test_a_broken_watchdog_check_is_the_agents_problem(self):
+        self.assertTrue(watchdog.is_advisory('watchdog_internal_error:check_services'))
+
+    def test_genuinely_urgent_classes_are_not_advisory(self):
         for key in ('service_down:nova-main.service',
-                    'secrets_hygiene:key_in_repo',
-                    'trading2:bot_order:abc123',
-                    'watchdog_internal_error:check_services'):
+                    'leaked_credential:sofi-bot',
+                    'secrets_hygiene:alpaca-bot:tracked',
+                    'prod:unattributed_order:xyz',
+                    'prod:stop_loss_breach:META'):
             self.assertFalse(watchdog.is_advisory(key), key)
 
-    def test_stuck_veto_matches_mid_key_not_just_as_a_prefix(self):
-        """stuck_veto keys are account-prefixed ('trading2:stuck_veto:SPY'),
-        so a startswith() test would silently miss every one of them -- which
-        is exactly the bug that let them re-ping for days."""
-        self.assertTrue(watchdog.is_advisory('anyaccount:stuck_veto:XYZ'))
 
+class AlertReachesUserTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.now(timezone.utc)
 
-class AdvisorySuppressionTests(unittest.TestCase):
-    """Exercises the decision in main(): re-ping only on a CHANGED message."""
+    def _ago(self, minutes):
+        return (self.now - timedelta(minutes=minutes)).isoformat()
 
-    def _should_alert(self, key, old_msg, new_msg, cooldown_elapsed=True):
-        existing = {'message': old_msg} if old_msg is not None else None
-        should = cooldown_elapsed
-        if (should and existing and watchdog.is_advisory(key)
-                and existing.get('message') == new_msg):
-            should = False
-        return should
+    def test_nothing_advisory_ever_reaches_the_user(self):
+        for key in ('log_errors:x.service', 'git_drift:repo', 'stale_code:x.service',
+                    'trading2:stuck_veto:SPY', 'trading2:bot_order:abc',
+                    'trading2:api_error:orders',
+                    'watchdog_internal_error:check_services'):
+            self.assertFalse(
+                watchdog.alert_reaches_user(key, first_seen=self._ago(600), now=self.now),
+                f'{key} must never reach the user, even after hours')
 
-    def test_identical_advisory_message_does_not_re_ping(self):
-        msg = 'SPY vetoed 3 consecutive checks on the identical reasoning'
-        self.assertFalse(self._should_alert('trading2:stuck_veto:SPY', msg, msg))
+    def test_a_freshly_downed_service_does_not_wake_the_user(self):
+        """The sweep restarts it within ~15 min. Escalating on first detection
+        would put an error in front of them that was about to fix itself --
+        precisely what they asked to stop."""
+        self.assertFalse(watchdog.alert_reaches_user(
+            'service_down:nova-main.service', first_seen=self._ago(5), now=self.now))
 
-    def test_changed_advisory_message_does_re_ping(self):
-        """A veto that shifts to NEW reasoning is new information."""
-        self.assertTrue(self._should_alert(
-            'trading2:stuck_veto:SPY',
-            "vetoed on ['crash']",
-            "vetoed on ['bankruptcy']"))
+    def test_a_service_still_down_after_the_grace_period_does(self):
+        """If restarting had been going to work, it would have by now."""
+        self.assertTrue(watchdog.alert_reaches_user(
+            'service_down:nova-main.service', first_seen=self._ago(90), now=self.now))
 
-    def test_first_ever_occurrence_always_pings(self):
-        self.assertTrue(self._should_alert(
-            'trading2:stuck_veto:SPY', None, 'first time seen'))
+    def test_the_boundary(self):
+        g = watchdog.ESCALATE_AFTER_MINUTES
+        self.assertFalse(watchdog.alert_reaches_user(
+            'service_down:x', first_seen=self._ago(g - 1), now=self.now))
+        self.assertTrue(watchdog.alert_reaches_user(
+            'service_down:x', first_seen=self._ago(g + 1), now=self.now))
 
-    def test_identical_urgent_message_still_re_pings(self):
-        msg = 'nova-main.service is "failed", not active'
-        self.assertTrue(self._should_alert('service_down:nova-main.service', msg, msg))
+    def test_security_and_money_alerts_escalate_immediately(self):
+        """No grace period: no amount of restarting addresses a leaked key,
+        an order placed with someone else's credentials, or a breached stop."""
+        for key in ('leaked_credential:sofi-bot',
+                    'secrets_hygiene:alpaca-bot:tracked',
+                    'prod:unattributed_order:xyz',
+                    'prod:stop_loss_breach:META'):
+            self.assertTrue(
+                watchdog.alert_reaches_user(key, first_seen=self._ago(0), now=self.now), key)
 
-    def test_nothing_pings_before_the_cooldown_elapses(self):
-        self.assertFalse(self._should_alert(
-            'service_down:x', 'down', 'down', cooldown_elapsed=False))
+    def test_missing_or_malformed_first_seen_does_not_escalate_or_crash(self):
+        for bad in (None, '', 'not-a-timestamp'):
+            self.assertFalse(watchdog.alert_reaches_user(
+                'service_down:x', first_seen=bad, now=self.now))
 
 
 if __name__ == '__main__':
