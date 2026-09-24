@@ -3,8 +3,6 @@ const POLL_INTERVAL_MS = 15000;
 let currentAccount = null;
 let currentTab = 'account'; // 'account' or 'agents'
 let pollTimer = null;
-let showAllDecisions = false; // default: vetoes only -- most decisions are routine allows, not worth scanning past on mobile
-let lastDecisions = [];
 
 function showLogin(message) {
   document.getElementById('login-screen').classList.remove('hidden');
@@ -86,16 +84,14 @@ async function refresh() {
     // before) because issues now render AS per-bot icons on the agent rows
     // themselves rather than as their own always-visible text panel -- see
     // renderAgentsOverview/renderInfraIssues.
-    const [agents, decisions, issues, fleetAudit, marketStatus] = await Promise.all([
+    const [agents, issues, fleetAudit, marketStatus] = await Promise.all([
       api('/api/agents-overview').then((r) => r.json()),
-      api('/api/research-agent/decisions').then((r) => r.json()),
       api('/api/issues').then((r) => r.json()),
       api('/api/fleet-audit').then((r) => r.json()),
       api('/api/market-status').then((r) => r.json()),
     ]);
     renderAgentsOverview(agents, issues);
-    renderResearchAgentDecisions(decisions);
-    renderInfraIssues(issues);
+      renderInfraIssues(issues);
     renderFleetAudit(fleetAudit);
     renderMarketStatus(marketStatus);
 
@@ -305,42 +301,6 @@ function renderMarketStatus(status) {
     : 'soon';
   banner.textContent = `Stock market closed — reopens ${reopens}. Crypto keeps trading 24/7 regardless.`;
   banner.classList.remove('hidden');
-}
-
-function renderResearchAgentDecisions(decisions) {
-  lastDecisions = decisions;
-  renderFilteredDecisions();
-}
-
-function renderFilteredDecisions() {
-  const list = document.getElementById('research-agent-list');
-  const shown = showAllDecisions ? lastDecisions : lastDecisions.filter((d) => d.veto);
-  list.innerHTML = '';
-  shown.forEach((d) => {
-    const item = document.createElement('div');
-    item.className = 'decision-item';
-    const vetoBadge = d.veto ? '<span class="badge badge-red">Blocked</span>' : '<span class="badge badge-green">Allowed</span>';
-    const conf = (d.confidence === null || d.confidence === undefined) ? '' : `<span>${Math.round(d.confidence * 100)}%</span>`;
-    const flags = (d.risk_flags || []).map((f) => `<span class="tag">${f}</span>`).join('');
-    const bot = d.bot ? d.bot[0].toUpperCase() + d.bot.slice(1) : '-';
-    item.innerHTML = `
-      <div class="item-top">
-        <span class="item-title">${d.symbol}</span>
-        <span class="item-sub">${bot}</span>
-        ${vetoBadge}
-      </div>
-      <div class="item-meta">
-        <span>${niceTime(d.timestamp)}</span>
-        ${conf}
-        ${flags}
-      </div>
-      <div class="item-detail hidden">${d.reasoning || ''}</div>`;
-    item.addEventListener('click', () => item.querySelector('.item-detail').classList.toggle('hidden'));
-    list.appendChild(item);
-  });
-  if (!shown.length) {
-    list.innerHTML = `<p class="hint">${showAllDecisions ? 'No decisions logged yet' : 'No vetoes yet — nothing blocked so far'}</p>`;
-  }
 }
 
 function renderFleetAudit(entries) {
@@ -589,18 +549,6 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 document.getElementById('logout-btn').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   showLogin();
-});
-
-document.getElementById('research-agent-toggle').addEventListener('click', (e) => {
-  const body = document.getElementById('research-agent-body');
-  const nowHidden = body.classList.toggle('hidden');
-  e.target.textContent = 'Research Agent Decisions ' + (nowHidden ? '▸' : '▾');
-});
-
-document.getElementById('research-agent-filter-toggle').addEventListener('click', (e) => {
-  showAllDecisions = !showAllDecisions;
-  e.target.textContent = showAllDecisions ? 'Vetoes only' : 'Show all';
-  renderFilteredDecisions();
 });
 
 document.getElementById('fleet-audit-toggle').addEventListener('click', (e) => {

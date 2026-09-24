@@ -119,7 +119,7 @@ class FindTradeTriggerTests(unittest.IsolatedAsyncioTestCase):
             r = await app.find_trade_trigger(_req('sofi', {'password': 'ok'}))
         self.assertEqual(json.loads(r.body)['ok'], True)
         self.assertEqual(run.call_args[0][0],
-                         ['sudo', '-n', 'systemctl', 'start', config.FIND_TRADE_UNIT])
+                         ['sudo', '-n', 'systemctl', '--no-block', 'start', config.FIND_TRADE_UNIT])
 
     async def test_a_failed_start_surfaces_as_an_error(self):
         with patch.object(app.auth, 'check_rate_limit', return_value=True), \

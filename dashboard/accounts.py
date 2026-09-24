@@ -45,7 +45,7 @@ def get_client(account_id: str):
 # AlpacaTradingBot memory's reference_bot_naming.md, kept here (not
 # hardcoded in the frontend) so it's one place to update. 'monitored'
 # drives whether the dashboard shows live health/positions for that agent
-# (via ACCOUNTS above / the research-agent decisions file) or just the
+# (via ACCOUNTS above) or just the
 # static description.
 #
 # Mini and Watcher intentionally omitted (removed from the dashboard
@@ -78,12 +78,6 @@ AGENTS_OVERVIEW = [
         'id': 'trading2',
         'label': 'Nova',
         'role': "A separate bot with a different trading style, on its own account (Mini's former account, reassigned 2026-08-27).",
-        'monitored': True,
-    },
-    {
-        'id': 'research_agent',
-        'label': 'Research Agent',
-        'role': "DISABLED 2026-08-31 (RESEARCH_AGENT_VETO_ENABLED=false on all 3 bots) -- Anthropic API credits not being kept funded. When it was on: double-checked a candidate entry against the news (Claude + web search) before it was placed, and could veto it. Fail-open by design, so disabling it changed no actual trading behavior -- it was already a no-op once credits first ran out. Decision history below is preserved.",
         'monitored': True,
     },
 ]

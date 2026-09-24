@@ -21,8 +21,6 @@ SUMMARY_TTL = 10
 POSITIONS_TTL = 10
 ORDERS_TTL = 30
 AGENTS_OVERVIEW_TTL = 10
-RESEARCH_AGENT_DECISIONS_TTL = 10
-RESEARCH_AGENT_DECISIONS_LIMIT = 50
 ISSUES_TTL = 10
 FLEET_AUDIT_TTL = 300  # each bot's log only gains one new entry per day (cron, ~06:00 UTC) -- no need to re-read every 10s
 MARKET_STATUS_TTL = 300  # market open/closed state changes at most twice a day
@@ -357,71 +355,14 @@ async def _account_health(account_id: str):
         return {'healthy': False, 'detail': str(e)}
 
 
-def _load_research_decisions():
-    """Reads all three bots' decision logs (Main, Sofi, Nova -- see
-    config.RESEARCH_AGENT_DECISIONS_PATHS) and merges them into one flat,
-    timestamp-sorted list, each entry tagged with which bot it came from.
-    A missing file just means that bot hasn't logged a decision yet, not an
-    error -- three independent processes, each writing its own file at its
-    own pace."""
-    flat = []
-    for bot, path in config.RESEARCH_AGENT_DECISIONS_PATHS.items():
-        try:
-            with open(path) as f:
-                decisions = json.load(f)
-        except FileNotFoundError:
-            continue
-        except (OSError, json.JSONDecodeError) as e:
-            # One bot's file being unreadable (permissions, transient disk
-            # issue) or corrupt shouldn't 502 the other two bots' decisions
-            # -- log and skip just this source.
-            logger.error(f"[dashboard] Failed to read {bot} research decisions ({path}): {e}")
-            continue
-        flat.extend(dict(d, symbol=symbol, bot=bot) for symbol, entries in decisions.items() for d in entries)
-    flat.sort(key=lambda d: d.get('timestamp') or '', reverse=True)
-    return flat
-
-
-def _research_agent_health():
-    """'Healthy' here means 'every bot's decisions file that exists is
-    readable,' not 'the agent is currently active' -- a veto call only
-    fires on a rare real buy signal (see agents/research_agent.py /
-    bot/research_agent.py / pdt15rev-bot/research_agent.py), so a quiet
-    file is normal, not a fault, unlike a regular heartbeat. detail carries
-    the most recent decision's bot/timestamp/symbol across all three when
-    available."""
-    try:
-        flat = _load_research_decisions()
-    except (json.JSONDecodeError, OSError) as e:
-        return {'healthy': False, 'detail': str(e)}
-    if not flat:
-        return {'healthy': True, 'detail': 'no decisions logged yet'}
-    latest = flat[0]
-    return {'healthy': True, 'detail': f"{len(flat)} logged, most recent: {latest['bot']}/{latest['symbol']} at {latest.get('timestamp', 'unknown time')}"}
-
-
 async def agents_overview(request):
     async def _health_for(agent):
         if not agent['monitored']:
             return {'healthy': None, 'detail': 'not yet monitored'}
-        if agent['id'] == 'research_agent':
-            return await get_or_fetch('research_agent', 'health', AGENTS_OVERVIEW_TTL, _research_agent_health)
         return await get_or_fetch(agent['id'], 'health', AGENTS_OVERVIEW_TTL, lambda: _account_health(agent['id']))
 
     results = [dict(agent, health=await _health_for(agent)) for agent in AGENTS_OVERVIEW]
     return JSONResponse(results)
-
-
-async def research_agent_decisions(request):
-    def _load():
-        return _load_research_decisions()[:RESEARCH_AGENT_DECISIONS_LIMIT]
-
-    try:
-        data = await get_or_fetch('research_agent', 'decisions', RESEARCH_AGENT_DECISIONS_TTL, _load)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.error(f"[dashboard] Failed to read research agent decisions: {e}")
-        return JSONResponse({'error': str(e)}, status_code=502)
-    return JSONResponse(data)
 
 
 def _load_active_alerts(path, source):
@@ -475,9 +416,8 @@ def _load_fleet_audit():
     any Claude session -- one process per bot, own venv, own schedule) and
     returns just the most recent entry per bot, tagged with which bot it
     came from. A missing file just means that bot's first cron run hasn't
-    fired yet, not an error -- same fault-tolerant-per-source pattern as
-    _load_research_decisions above, so one bot's unreadable log can't 502
-    the other two."""
+    fired yet, not an error -- fault-tolerant per source, so one bot's
+    unreadable log can't 502 the other two."""
     latest = []
     for bot, path in config.FLEET_AUDIT_LOG_PATHS.items():
         try:
@@ -603,7 +543,12 @@ async def find_trade_trigger(request):
 
     try:
         result = subprocess.run(
-            ['sudo', '-n', 'systemctl', 'start', config.FIND_TRADE_UNIT],
+            # --no-block: systemctl start on a Type=oneshot that is already running
+            # otherwise BLOCKS until the in-flight scan finishes, outliving the
+            # timeout below and surfacing as a failure when nothing failed --
+            # seen live on a double-press. The state file reports what happened,
+            # not this exit code. The sudoers rule pins this exact argv.
+            ['sudo', '-n', 'systemctl', '--no-block', 'start', config.FIND_TRADE_UNIT],
             capture_output=True, text=True, timeout=20)
     except (subprocess.SubprocessError, OSError) as e:
         logger.error(f"[dashboard] Could not start {config.FIND_TRADE_UNIT}: {e}")
@@ -634,7 +579,6 @@ routes = [
     Route('/api/accounts/{account_id}/find-trade', find_trade_trigger, methods=['POST']),
     Route('/api/accounts/{account_id}/find-trade-status', find_trade_status),
     Route('/api/agents-overview', agents_overview),
-    Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),
     Route('/api/fleet-audit', fleet_audit),
 
