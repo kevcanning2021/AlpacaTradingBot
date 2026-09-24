@@ -54,10 +54,16 @@ class LogErrorPersistenceTests(unittest.TestCase):
         Telegram sends while the message is unchanged)."""
         log = {}
         msgs = []
+        # Spaced as a fraction of the retention window, not a fixed number of
+        # hours: this test is about the COUNT growing, and hard-coding hours
+        # made it fail the moment LOG_ERROR_WINDOW_HOURS was tuned from 24 to
+        # 2 -- a fixture breaking on a config change it does not test.
+        # Ageing out has its own test below.
+        step = timedelta(hours=watchdog.LOG_ERROR_WINDOW_HOURS / 6.0)
         for i in range(3):
             with _journal([f'ERROR failure {i}']):
                 issues = watchdog.check_new_log_errors(
-                    'nova.service', None, error_log=log, now=NOW + timedelta(hours=i))
+                    'nova.service', None, error_log=log, now=NOW + step * i)
             msgs.append(dict(issues)['log_errors:nova.service'])
         self.assertIn('1 run(s)', msgs[0])
         self.assertIn('3 run(s)', msgs[2])

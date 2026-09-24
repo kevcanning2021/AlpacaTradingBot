@@ -182,7 +182,25 @@ def alert_reaches_user(key, first_seen=None, now=None):
 # watching a phone had strictly better information than anything reading the
 # state file, which is backwards. An alert meant to be noticed by something
 # that polls has to outlive the instant that raised it.
-LOG_ERROR_WINDOW_HOURS = 24
+# 2h, reduced from 24 on 2026-09-24. The original reasoning still stands but
+# the constraint behind it is gone.
+#
+# 24h was set after a week-long miss: this alert class was transient by
+# construction (detection window ~15 min, and main() deleted any key not
+# re-raised), so Nova's 51 failed crypto orders across five days were live in
+# active_alerts perhaps 3-4% of the time. Anything polling the state file had
+# a ~96% chance of seeing nothing. Holding the alert open for 24h fixed that.
+#
+# What changed: advisory alerts are now ALSO appended to
+# AGENT_REVIEW_QUEUE, which the sweep drains and deletes. The durable record
+# of "this happened" lives there, so active_alerts no longer has to be both
+# the live state AND the history. Keeping a 24h window made the dashboard
+# show a recovered blip as an open error for a full day, which is the
+# complaint this addresses.
+#
+# 2h still spans several watchdog runs, so a genuinely intermittent fault
+# stays visible between occurrences rather than flickering.
+LOG_ERROR_WINDOW_HOURS = 2
 
 # Repos checked for uncommitted drift. The note that used to sit here said
 # trading-2-0 was "deliberately absent -- a plain copied directory, not a git
@@ -306,7 +324,29 @@ STUCK_VETO_THRESHOLD = 3
 # as if it were still live -- gates check_research_agent_health() on the most
 # recent decision's own age. Matches research_agent.py's LOOKBACK_HOURS=72,
 # the same window that module already treats as still-relevant news.
-STUCK_VETO_MAX_AGE_HOURS = 72
+# 6h, not 72. This is the answer to "is this symbol being blocked RIGHT NOW",
+# and the old value answered a different question.
+#
+# 72 was chosen to mirror research_agent.py's LOOKBACK_HOURS -- how old an
+# ARTICLE may be and still count. That is not the same as how old a DECISION
+# may be and still mean something is stuck. A genuinely stuck veto re-fires
+# constantly: TSLA logged 751 consecutive identical vetoes in 23.9h, roughly
+# one every two minutes. So a decision more than a few hours old is not a
+# block, it is history.
+#
+# Measured 2026-09-24, with the old value in place: TSLA's last decision was
+# 0.2h old (really blocking) while SPY's was 45h and ETH/USD's 50h. All three
+# were alerting identically. The SPY one had been fixed in code two days
+# earlier and kept reappearing on the dashboard anyway -- a sweep cleared it
+# and the next run re-derived it from the same stale history, because the
+# check reads decision records rather than asking whether the veto still
+# holds. That is what "errors don't close when they're resolved" looked like
+# from the inside.
+#
+# 6h is generous for the real case (a symbol checked a few times a day still
+# qualifies) and short enough that a fixed cause clears within the session
+# rather than two days later.
+STUCK_VETO_MAX_AGE_HOURS = 6
 
 # Maps an issue key back to which bot it's actually about, so the dashboard can
 # group issues per-bot instead of one flat list -- added 2026-09-02 after the
