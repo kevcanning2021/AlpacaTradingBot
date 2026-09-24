@@ -19,7 +19,7 @@ ACCOUNTS = {
     # under its correct current label. Keeping a 'test' entry here would just
     # duplicate Nova's data under the wrong name.
     'sofi': {
-        'label': 'Sofi',
+        'label': 'Sofi (Nova strategy)',
         'client': ReadOnlyAlpacaClient(AlpacaClient(
             api_key=config.ALPACA_SOFI_API_KEY,
             secret_key=config.ALPACA_SOFI_SECRET_KEY,

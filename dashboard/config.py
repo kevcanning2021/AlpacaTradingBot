@@ -44,7 +44,11 @@ PEAK_PRICES_PATHS = {
     # was never in here. The old file still exists but stopped changing the
     # moment alpaca-bot was retired, and a frozen peak price rendered next to
     # a live position is worse than none.
-    'sofi': os.getenv('PEAK_PRICES_PATH_SOFI', '/opt/sofi-bot/peak_prices_state.json'),
+    # 'sofi' removed 2026-09-24 for the same reason 'prod' was: the account is
+    # now traded by Nova's code, which has no trailing-stop mechanism at all
+    # (its stop is fixed at entry). The old file exists but stopped changing
+    # when sofi-bot was retired, and a frozen peak price rendered beside a
+    # live position is worse than none.
 }
 
 # Path to Nova's sqlite trade journal -- read directly (SELECT only) for each
@@ -60,6 +64,12 @@ NOVA_JOURNAL_DB_PATH = os.getenv('NOVA_JOURNAL_DB_PATH', '/opt/trading-2-0/data/
 # strategy at $50 and at $100k.
 MAIN_JOURNAL_DB_PATH = os.getenv('MAIN_JOURNAL_DB_PATH', '/opt/nova-main/data/trade_journal.db')
 
+# Sofi's account has been traded by nova-sofi since 2026-09-24 -- a plain
+# clone of trading-2-0, same code and parameters, different account -- so it
+# keeps the same sqlite journal rather than sofi-bot's trade_history.json.
+# All three accounts now run one codebase; only the balances differ.
+SOFI_JOURNAL_DB_PATH = os.getenv('SOFI_JOURNAL_DB_PATH', '/opt/nova-sofi/data/trade_journal.db')
+
 
 def journal_db_path(account_id):
     """sqlite journal for accounts whose bot keeps one, else None.
@@ -72,6 +82,7 @@ def journal_db_path(account_id):
     return {
         'trading2': NOVA_JOURNAL_DB_PATH,
         'prod': MAIN_JOURNAL_DB_PATH,
+        'sofi': SOFI_JOURNAL_DB_PATH,
     }.get(account_id)
 
 # Each bot's own daily_fleet_audit.py (cron, independent of any Claude
@@ -93,13 +104,16 @@ FLEET_AUDIT_LOG_PATHS = {
 # Keyed by dashboard account id (not bot name) since it's read per selected
 # account. Nova is absent on purpose: it keeps round-trips in the sqlite
 # journal at NOVA_JOURNAL_DB_PATH above, read separately.
-CLOSED_TRADES_PATHS = {
-    # 'prod' removed 2026-09-23 -- it now keeps a sqlite journal instead, see
-    # journal_db_path(). Both readers check this dict FIRST and fall through
-    # to the journal, so leaving a stale entry here would have quietly kept
-    # serving the retired bot's frozen history as if it were current.
-    'sofi': os.getenv('TRADE_HISTORY_PATH_SOFI', '/opt/sofi-bot/trade_history.json'),
-}
+# Now EMPTY. Both 'prod' (2026-09-23) and 'sofi' (2026-09-24) moved off
+# trade_history.json when their accounts were handed to Nova's code, which
+# keeps a sqlite journal instead -- see journal_db_path(). Both readers check
+# this dict FIRST and fall through to the journal, so a stale entry here would
+# quietly keep serving a retired bot's frozen history as if it were current.
+#
+# Kept as an empty dict rather than deleted: the fall-through in app.py and
+# live_readiness.py reads it, and it is the right shape for any future bot
+# that does keep a JSON history.
+CLOSED_TRADES_PATHS = {}
 
 # Each bot's own git repo, read only to date its most recent bug fix as a
 # code-stability signal for the live-readiness panel. Keyed by dashboard

@@ -153,8 +153,17 @@ class MainAccountUsesJournalNotJsonTests(unittest.TestCase):
         self.assertNotEqual(config.journal_db_path('prod'),
                              config.journal_db_path('trading2'))
 
-    def test_accounts_without_a_journal_resolve_to_none(self):
-        self.assertIsNone(config.journal_db_path('sofi'))
+    def test_all_three_accounts_have_their_own_journal(self):
+        """Sofi gained one on 2026-09-24 when its account was handed to
+        nova-sofi, a plain clone of trading-2-0. All three accounts now run
+        one codebase; only the balances differ. Asserting the paths are
+        DISTINCT matters more than that they exist -- two deployments sharing
+        a journal would silently merge their samples."""
+        paths = {config.journal_db_path(a) for a in ('prod', 'sofi', 'trading2')}
+        self.assertEqual(len(paths), 3, 'two accounts share a journal: %s' % paths)
+        self.assertTrue(all(paths))
+
+    def test_an_unknown_account_resolves_to_none(self):
         self.assertIsNone(config.journal_db_path('nonsense'))
 
     def test_helper_reflects_patched_module_attributes(self):
