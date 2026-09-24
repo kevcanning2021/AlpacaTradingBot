@@ -7,7 +7,7 @@ from dashboard import config
 # those exactly so the dashboard and the registry never drift apart again.
 ACCOUNTS = {
     'prod': {
-        'label': 'Main (Nova strategy)',
+        'label': 'Main',
         'client': ReadOnlyAlpacaClient(AlpacaClient(
             api_key=config.ALPACA_PROD_API_KEY,
             secret_key=config.ALPACA_PROD_SECRET_KEY,
@@ -19,7 +19,7 @@ ACCOUNTS = {
     # under its correct current label. Keeping a 'test' entry here would just
     # duplicate Nova's data under the wrong name.
     'sofi': {
-        'label': 'Sofi (Nova strategy)',
+        'label': 'Sofi',
         'client': ReadOnlyAlpacaClient(AlpacaClient(
             api_key=config.ALPACA_SOFI_API_KEY,
             secret_key=config.ALPACA_SOFI_SECRET_KEY,

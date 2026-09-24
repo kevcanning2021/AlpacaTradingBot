@@ -129,13 +129,38 @@ CLOSED_TRADES_PATHS = {}
 # The unit is a systemd oneshot; the dashboard (unprivileged, alpacadash) may
 # start it via a sudoers rule scoped to exactly this one command. It may NOT
 # stop or restart anything, and cannot touch the always-on bots.
-FIND_TRADE_UNIT = os.getenv('FIND_TRADE_UNIT', 'nova-main-find-trade.service')
-FIND_TRADE_STATE_PATH = os.getenv('FIND_TRADE_STATE_PATH',
-                                   '/opt/nova-main/data/find_trade_state.json')
-# Which dashboard account the button belongs to. Keyed like every other
-# per-account path here so the route can reject a request aimed elsewhere
-# rather than silently trading the wrong balance.
-FIND_TRADE_ACCOUNT = os.getenv('FIND_TRADE_ACCOUNT', 'prod')
+# On-demand scan ("Find a Trade"): a button that runs ONE scan now, on the same
+# rules the always-on bots use. Keyed by dashboard account id, because more than
+# one account has one -- Main since 2026-09-23, Sofi since 2026-09-24.
+#
+# This started as three scalars (FIND_TRADE_UNIT / _STATE_PATH / _ACCOUNT) built
+# for exactly one account. Adding a second meant either duplicating all three or
+# keying them; keyed is the version that does not rot, and the frontend already
+# discovers which accounts have a button by asking the API rather than holding
+# its own copy of the answer.
+#
+# Each unit is a systemd oneshot the dashboard may start via a sudoers rule
+# scoped to that single command. It may NOT stop or restart anything.
+FIND_TRADE_UNITS = {
+    'prod': os.getenv('FIND_TRADE_UNIT_PROD', 'nova-main-find-trade.service'),
+    'sofi': os.getenv('FIND_TRADE_UNIT_SOFI', 'nova-sofi-find-trade.service'),
+}
+
+FIND_TRADE_STATE_PATHS = {
+    'prod': os.getenv('FIND_TRADE_STATE_PATH_PROD', '/opt/nova-main/data/find_trade_state.json'),
+    'sofi': os.getenv('FIND_TRADE_STATE_PATH_SOFI', '/opt/nova-sofi/data/find_trade_state.json'),
+}
+
+
+def find_trade_unit(account_id):
+    """The oneshot unit for this account's button, or None if it has none."""
+    return FIND_TRADE_UNITS.get(account_id)
+
+
+def find_trade_state_path(account_id):
+    """Where that unit writes its result, or None if the account has no button."""
+    return FIND_TRADE_STATE_PATHS.get(account_id)
+
 
 BUG_HISTORY_PATH = os.getenv('BUG_HISTORY_PATH',
                               os.path.join(os.path.dirname(__file__), 'bug_history.json'))

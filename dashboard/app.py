@@ -475,12 +475,13 @@ async def find_trade_status(request):
     error, exactly as _load_fleet_audit treats its own absent state.
     """
     account_id = request.path_params['account_id']
-    if account_id != config.FIND_TRADE_ACCOUNT:
+    state_path = config.find_trade_state_path(account_id)
+    if state_path is None:
         return JSONResponse({'error': 'no on-demand scan for this account'}, status_code=404)
 
-    unit_active = _find_trade_unit_active()
+    unit_active = _find_trade_unit_active(account_id)
     try:
-        with open(config.FIND_TRADE_STATE_PATH) as f:
+        with open(state_path) as f:
             state = json.load(f)
     except FileNotFoundError:
         return JSONResponse({'status': 'idle', 'running': unit_active,
@@ -500,14 +501,17 @@ async def find_trade_status(request):
     return JSONResponse(state)
 
 
-def _find_trade_unit_active():
+def _find_trade_unit_active(account_id):
     """systemctl is-active -- readable unprivileged, no sudo needed."""
+    unit = config.find_trade_unit(account_id)
+    if unit is None:
+        return False
     try:
-        result = subprocess.run(['systemctl', 'is-active', config.FIND_TRADE_UNIT],
+        result = subprocess.run(['systemctl', 'is-active', unit],
                                  capture_output=True, text=True, timeout=10)
         return result.stdout.strip() in ('active', 'activating')
     except (subprocess.SubprocessError, OSError) as e:
-        logger.error(f"[dashboard] Could not query {config.FIND_TRADE_UNIT}: {e}")
+        logger.error(f"[dashboard] Could not query {unit}: {e}")
         return False
 
 
@@ -522,7 +526,8 @@ async def find_trade_trigger(request):
       - idempotency: a double-click must be rejected, not run twice
     """
     account_id = request.path_params['account_id']
-    if account_id != config.FIND_TRADE_ACCOUNT:
+    unit = config.find_trade_unit(account_id)
+    if unit is None:
         return JSONResponse({'error': 'no on-demand scan for this account'}, status_code=404)
 
     ip = request.client.host if request.client else 'unknown'
@@ -538,7 +543,7 @@ async def find_trade_trigger(request):
         logger.warning(f"[dashboard] find-trade refused: bad step-up password from {ip}")
         return JSONResponse({'error': 'password required'}, status_code=401)
 
-    if _find_trade_unit_active():
+    if _find_trade_unit_active(account_id):
         return JSONResponse({'error': 'a scan is already running'}, status_code=409)
 
     try:
@@ -548,14 +553,14 @@ async def find_trade_trigger(request):
             # timeout below and surfacing as a failure when nothing failed --
             # seen live on a double-press. The state file reports what happened,
             # not this exit code. The sudoers rule pins this exact argv.
-            ['sudo', '-n', 'systemctl', '--no-block', 'start', config.FIND_TRADE_UNIT],
+            ['sudo', '-n', 'systemctl', '--no-block', 'start', unit],
             capture_output=True, text=True, timeout=20)
     except (subprocess.SubprocessError, OSError) as e:
-        logger.error(f"[dashboard] Could not start {config.FIND_TRADE_UNIT}: {e}")
+        logger.error(f"[dashboard] Could not start {unit}: {e}")
         return JSONResponse({'error': 'could not start the scan'}, status_code=502)
 
     if result.returncode != 0:
-        logger.error(f"[dashboard] {config.FIND_TRADE_UNIT} start failed: {result.stderr.strip()[:300]}")
+        logger.error(f"[dashboard] {unit} start failed: {result.stderr.strip()[:300]}")
         return JSONResponse({'error': 'could not start the scan'}, status_code=502)
 
     logger.info(f"[dashboard] on-demand scan triggered for {account_id} by {ip}")
