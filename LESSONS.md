@@ -222,3 +222,41 @@ gets them, not just whoever's driving a particular session.
     what to watch (services, repos, accounts, log paths) needs its own
     periodic reconciliation against the live system, because its failures
     present as good news.
+
+
+27. **An alert that repeats itself unchanged is worse than no alert.**
+    The user reported "lots of errors". There were none. Four stuck_veto
+    alerts were live: three for entirely CORRECT vetoes (a genuine Tesla
+    lawsuit story, counted twice because Nova and nova-main run the same
+    code against different accounts) and one for a stale article whose
+    cause was already fixed. Under a 2h cooldown that is roughly 48
+    identical Telegram messages a day, not one of which needed an action.
+    The description was a fair account of the inbox and a completely wrong
+    account of the fleet. The suppression rule for this already existed —
+    it had been written for `log_errors:` after the same complaint — but
+    it was keyed to one prefix instead of to the PROPERTY that made it
+    right, so every later alert class re-learned the problem from scratch.
+    Split alerts by whether they need an action now (service down, leaked
+    credential — keep nagging) or describe something to review (keep
+    visible on the dashboard, announce once). Repetition is not urgency,
+    and the one message that matters arrives looking exactly like the
+    forty-seven that did not.
+
+28. **"Is the deployed code current?" is a question about FILES, not
+    commits — I got this wrong while building the check for it.**
+    Investigating why a fixed veto was still firing, I compared each
+    service's start time against its newest git commit, found the services
+    had started 23 seconds BEFORE the fix was committed, and reported a
+    real bug with a precise-sounding timeline. It was wrong. The file had
+    been written at 09:50:24 and the service restarted at 09:51:25 — sixty
+    seconds later, with the fix. Only the `git commit` came afterwards.
+    The alert was stale decision history, nothing more. Committing after
+    restarting is the NORMAL shape of this project's workflow (edit, test,
+    restart, commit), so a commit-based check does not merely mismeasure,
+    it inverts: it cries stale on precisely the services that are current.
+    What Python actually caches is the module it imported from a FILE, so
+    mtime is the only signal that answers the question. The near-miss
+    worth remembering is that the wrong version produced a confident,
+    well-evidenced, specific narrative — and the thing that exposed it was
+    printing the raw per-service numbers instead of trusting the check's
+    own verdict.

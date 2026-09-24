@@ -76,7 +76,50 @@ SERVICES = [
     'nova-main.service', 'alpaca-dashboard.service',
     'sofi-bot.service', 'trading-2-0.service',
 ]
+# Units whose running process is compared against their repo's newest CODE
+# commit -- see check_stale_code(). Deliberately separate from SERVICES (which
+# answers "is it up?") and GIT_REPOS (which answers "is the work committed?");
+# neither of those can see the gap this closes.
+SERVICE_REPOS = {
+    'trading-2-0.service': '/opt/trading-2-0',
+    'sofi-bot.service': '/opt/sofi-bot',
+    'nova-main.service': '/opt/nova-main',
+    'alpaca-dashboard.service': '/opt/alpaca-dashboard',
+}
+
+# A deploy legitimately spends a few moments with HEAD newer than the running
+# process (commit, then restart). Only complain once that gap has outlived a
+# plausible deploy -- one watchdog cycle.
+STALE_CODE_GRACE_MINUTES = 15
+
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
+
+
+def is_advisory(key):
+    """True for alert classes that describe something to REVIEW, not something
+    breaking right now.
+
+    These get announced once and then stay quiet while their message is
+    unchanged, instead of re-pinging every ALERT_COOLDOWN_SECONDS. They remain
+    in active_alerts and on the dashboard throughout -- visibility is not the
+    thing being reduced, repetition is.
+
+    Why (2026-09-24): four stuck_veto alerts were live at once, three of them
+    for entirely correct vetoes (a genuine Tesla lawsuit story, counted twice
+    because Nova and nova-main run the same code against different accounts)
+    and one for a stale article already fixed in code. At a 2h cooldown that
+    is ~48 identical Telegram messages a day, none of which needed an action.
+    The user's report was "lots of errors" -- which was a fair description of
+    the inbox, and a completely wrong description of the fleet. An alert
+    channel that cries wolf hourly is worse than one that stays silent,
+    because the ONE message that matters arrives looking exactly like the
+    forty-seven that did not.
+
+    service_down, secrets-hygiene and account-level alerts are deliberately
+    NOT advisory: those are worth nagging about until someone acts.
+    """
+    return key.startswith(('log_errors:', 'git_drift:', 'stale_code:')) or ':stuck_veto:' in key
+
 
 # How far back a log error keeps an alert alive. Added 2026-09-21 after a
 # week-long miss: check_new_log_errors only ever inspected the journal since
@@ -435,6 +478,113 @@ def check_research_agent_health(account_key, label, decisions_path):
     return issues
 
 
+def _service_started_at(unit):
+    """When the current process of `unit` actually began, or None.
+
+    Parses systemd's human form ("Thu 2026-09-24 11:17:57 UTC") rather than
+    ActiveEnterTimestampUSec, which this systemd build does not expose at all
+    -- it returns an empty string, which the first version of this function
+    quietly turned into None, which check_stale_code quietly skipped. The
+    check then reported zero issues while measuring nothing. A monitor whose
+    failure mode is silent good news is worse than no monitor, so this returns
+    None ONLY for a genuinely stopped unit.
+    """
+    result = subprocess.run(
+        ['systemctl', 'show', '-p', 'ActiveEnterTimestamp', '--value', unit],
+        capture_output=True, text=True, timeout=10)
+    raw = result.stdout.strip()
+    if not raw:
+        return None  # unit has never run
+    parts = raw.split()
+    if len(parts) < 3:
+        return None
+    try:
+        dt = datetime.strptime(f'{parts[1]} {parts[2]}', '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return None
+    # systemd renders in the machine's local zone and names it; this box is
+    # UTC, but don't bake that in.
+    if len(parts) > 3 and parts[3] == 'UTC':
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
+
+
+def _newest_code_mtime(repo):
+    """Newest mtime among the .py files the service actually imports, or None.
+
+    Uses mtime, NOT the newest commit date. That distinction is the whole
+    check: the question is "is the running process older than the code on
+    disk", and a commit is neither necessary nor sufficient for the code on
+    disk to have changed. Committing AFTER restarting -- edit, test, restart,
+    then commit, which is the normal workflow here -- would make a commit-based
+    version cry stale on a service that is perfectly up to date. It did
+    exactly that on 2026-09-24 and briefly convinced me two bots had been
+    running a day-old research agent when the files predated the restart by
+    sixty seconds.
+
+    venv/.git/__pycache__ are skipped because they are not this project's
+    code; tests/ because nothing in the service process imports it.
+    """
+    skip = {'.git', 'venv', '__pycache__', 'node_modules', 'data', 'tests'}
+    newest = None
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in skip]
+        for name in files:
+            if not name.endswith('.py'):
+                continue
+            try:
+                m = os.path.getmtime(os.path.join(root, name))
+            except OSError:
+                continue
+            if newest is None or m > newest:
+                newest = m
+    if newest is None:
+        return None
+    return datetime.fromtimestamp(newest, tz=timezone.utc)
+
+
+def check_stale_code(now=None):
+    """A service still running code that git has already moved past.
+
+    The risk this covers (real, 2026-09-10): several research_agent fixes sat
+    on disk for DAYS because nobody restarted the services, and every other
+    check here reported healthy throughout -- service up, git clean, tests
+    passing, file correct. Each was asking a different question.
+
+    Python caches imported modules, so editing a file changes nothing until
+    the process restarts. "Deployed" is therefore a claim about a PROCESS, and
+    verifying it by reading the file is a category error -- the exact one made
+    here, twice now (see LESSONS 21). Comparing the process start against the
+    commit is the only form of the question a machine can answer.
+    """
+    now = now or datetime.now(timezone.utc)
+    issues = []
+    for unit, repo in SERVICE_REPOS.items():
+        try:
+            started = _service_started_at(unit)
+            changed = _newest_code_mtime(repo)
+        except (subprocess.SubprocessError, OSError) as e:
+            issues.append((f'stale_code:{unit}:error',
+                            f'{unit}: could not compare process against repo: {e}'))
+            continue
+        if started is None or changed is None:
+            continue  # not running (check_services covers that), or not a repo
+        if changed <= started:
+            continue
+        behind_h = (now - changed).total_seconds() / 3600
+        if behind_h * 60 < STALE_CODE_GRACE_MINUTES:
+            continue  # a deploy in progress, not a stuck one
+        issues.append((
+            f'stale_code:{unit}',
+            f'{unit} is running code older than its files: process started '
+            f'{started:%Y-%m-%d %H:%M}Z, newest .py under {repo} was written '
+            f'{changed:%Y-%m-%d %H:%M}Z ({behind_h:.1f}h unapplied). '
+            f'The file on disk is already correct -- Python caches imported '
+            f'modules, so this needs `systemctl restart {unit}` to take effect.'
+        ))
+    return issues
+
+
 def check_git_drift():
     """Uncommitted changes sitting in any fleet repo -- the one deterministic-
     checkable thing the fleet-review-agent covered that this watchdog didn't
@@ -582,6 +732,12 @@ def main():
         all_issues.append(('watchdog_internal_error:check_services', f'watchdog: check_services crashed: {e}'))
 
     try:
+        all_issues += check_stale_code()
+    except Exception as e:
+        print(f"check_stale_code failed: {e}")
+        all_issues.append(('watchdog_internal_error:check_stale_code', f'watchdog: check_stale_code crashed: {e}'))
+
+    try:
         all_issues += check_git_drift()
     except Exception as e:
         print(f"check_git_drift failed: {e}")
@@ -633,13 +789,14 @@ def main():
         should_alert = last_alert_at is None or (
             now - datetime.fromisoformat(last_alert_at)
         ).total_seconds() > ALERT_COOLDOWN_SECONDS
-        # A log-error alert now persists for LOG_ERROR_WINDOW_HOURS rather
-        # than clearing the moment errors pause, which would otherwise make
-        # the plain cooldown re-ping every 2h for a full day after a single
-        # burst. Re-ping these only when the count has actually grown; the
-        # alert stays visible in active_alerts (and on the dashboard)
-        # regardless, which is the part that was missing before.
-        if (should_alert and existing and key.startswith('log_errors:')
+        # Advisory alerts re-ping only when their message actually CHANGES.
+        # A log-error alert persists for LOG_ERROR_WINDOW_HOURS rather than
+        # clearing the moment errors pause, and a stuck_veto persists for
+        # STUCK_VETO_MAX_AGE_HOURS; under a plain cooldown both would re-ping
+        # every 2h for days about a condition nobody needs to act on again.
+        # The alert stays visible in active_alerts (and on the dashboard)
+        # regardless -- only the repetition stops. See is_advisory().
+        if (should_alert and existing and is_advisory(key)
                 and existing.get('message') == msg):
             should_alert = False
         if should_alert:
