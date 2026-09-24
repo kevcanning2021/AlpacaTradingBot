@@ -108,12 +108,118 @@ async function refresh() {
         api(`/api/accounts/${currentAccount}/trades`).then((r) => r.json()).then(renderClosedTrades),
         api(`/api/accounts/${currentAccount}/readiness`).then((r) => r.json()).then(renderReadiness),
       );
+      if (currentAccount === FIND_TRADE_ACCOUNT) {
+        accountCalls.push(
+          api(`/api/accounts/${currentAccount}/find-trade-status`)
+            .then((r) => r.json()).then(renderFindTrade),
+        );
+      } else {
+        // Re-hide on every other account. The card is only unhidden by
+        // renderFindTrade, so without this it would stay visible after
+        // switching tabs -- offering a Sofi-only control while the $100k
+        // account is on screen.
+        const card = document.getElementById('find-trade-card');
+        if (card) card.classList.add('hidden');
+      }
     }
     await Promise.all(accountCalls);
     banner.classList.add('hidden');
   } catch (e) {
     banner.classList.remove('hidden');
   }
+}
+
+// --- On-demand scan -------------------------------------------------------
+// The only control in this dashboard that spends money. Everything else is
+// read-only, which is why this one re-asks for the password rather than
+// trusting the session cookie alone: a stolen or replayed cookie should not
+// be able to start a trading session by itself.
+const FIND_TRADE_ACCOUNT = 'sofi';
+
+function renderFindTrade(state) {
+  const card = document.getElementById('find-trade-card');
+  const list = document.getElementById('find-trade-status');
+  const btn = document.getElementById('find-trade-btn');
+  if (!card) return;
+  card.classList.remove('hidden');
+
+  const running = state && (state.running || state.status === 'running');
+  btn.disabled = !!running;
+  btn.textContent = running ? 'Scanning…' : 'Find a trade now';
+
+  if (!state || state.status === 'idle') {
+    list.innerHTML = '<div class="muted">Not run yet.</div>';
+    return;
+  }
+  if (running) {
+    list.innerHTML = '<div>Scanning the watchlist…</div>';
+    return;
+  }
+
+  // A scan that found nothing is a SUCCESS, not a failure, and is styled that
+  // way deliberately -- showing it in red would train the reader to think the
+  // button is broken every time the market simply has no setup on offer.
+  let cls = 'badge-gray';
+  if (state.status === 'failed') cls = 'badge-red';
+  else if (state.traded) cls = 'badge-green';
+
+  const when = state.updated_at ? new Date(state.updated_at).toLocaleString() : '';
+  const label = state.status === 'failed' ? 'Failed'
+              : state.traded ? 'Trade opened' : 'No trade';
+  list.innerHTML =
+    '<div><span class="badge ' + cls + '">' + label + '</span> ' +
+    escapeHtml(state.message || '') + '</div>' +
+    (when ? '<div class="muted">' + escapeHtml(when) + '</div>' : '');
+}
+
+function wireFindTrade() {
+  const btn = document.getElementById('find-trade-btn');
+  const confirm = document.getElementById('find-trade-confirm');
+  const pw = document.getElementById('find-trade-password');
+  const go = document.getElementById('find-trade-go');
+  const cancel = document.getElementById('find-trade-cancel');
+  const err = document.getElementById('find-trade-error');
+  if (!btn) return;
+
+  const reset = () => {
+    confirm.classList.add('hidden');
+    btn.classList.remove('hidden');
+    pw.value = '';
+  };
+
+  btn.addEventListener('click', () => {
+    err.textContent = '';
+    btn.classList.add('hidden');
+    confirm.classList.remove('hidden');
+    pw.focus();
+  });
+  cancel.addEventListener('click', () => { err.textContent = ''; reset(); });
+  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') go.click(); });
+
+  go.addEventListener('click', async () => {
+    err.textContent = '';
+    go.disabled = true;
+    try {
+      const res = await api(`/api/accounts/${FIND_TRADE_ACCOUNT}/find-trade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw.value }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        err.textContent = body.error || 'Could not start the scan.';
+        return;
+      }
+      reset();
+      renderFindTrade({ status: 'running', running: true });
+      refresh();
+    } catch (e) {
+      // api() already redirects to the login screen on 401.
+      err.textContent = 'Could not start the scan.';
+    } finally {
+      go.disabled = false;
+    }
+  });
 }
 
 function healthBadge(health) {
@@ -502,6 +608,8 @@ document.getElementById('fleet-audit-toggle').addEventListener('click', (e) => {
   const nowHidden = body.classList.toggle('hidden');
   e.target.textContent = 'Daily Fleet Audit ' + (nowHidden ? '▸' : '▾');
 });
+
+wireFindTrade();
 
 (async function init() {
   try {

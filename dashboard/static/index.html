@@ -55,6 +55,23 @@
   <div id="account-tab-content">
     <section id="summary-card" class="card"></section>
 
+    <section class="card hidden" id="find-trade-card">
+      <h2>Find a Trade</h2>
+      <p class="muted" id="find-trade-help">
+        Runs one scan now, on the same M1/M5/H1/H2 rules the automatic bots use.
+        If nothing qualifies it will say so &mdash; it won't force a trade.
+      </p>
+      <div id="find-trade-status" class="decision-list"></div>
+      <div id="find-trade-confirm" class="hidden">
+        <input type="password" id="find-trade-password" placeholder="Confirm password"
+               autocomplete="current-password">
+        <button type="button" id="find-trade-go">Confirm</button>
+        <button type="button" id="find-trade-cancel">Cancel</button>
+      </div>
+      <button type="button" id="find-trade-btn">Find a trade now</button>
+      <p id="find-trade-error" class="error"></p>
+    </section>
+
     <section class="card">
       <h2>Positions</h2>
       <div id="positions-list" class="decision-list"></div>

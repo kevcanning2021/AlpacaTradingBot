@@ -1,5 +1,6 @@
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -527,6 +528,95 @@ async def market_status(request):
     })
 
 
+async def find_trade_status(request):
+    """Current state of the on-demand scan. Read-only, no extra privilege.
+
+    A missing file means it has never been run -- that is "idle", not an
+    error, exactly as _load_fleet_audit treats its own absent state.
+    """
+    account_id = request.path_params['account_id']
+    if account_id != config.FIND_TRADE_ACCOUNT:
+        return JSONResponse({'error': 'no on-demand scan for this account'}, status_code=404)
+
+    unit_active = _find_trade_unit_active()
+    try:
+        with open(config.FIND_TRADE_STATE_PATH) as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return JSONResponse({'status': 'idle', 'running': unit_active,
+                             'message': 'Has not been run yet.'})
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error(f"[dashboard] Could not read find-trade state: {e}")
+        return JSONResponse({'status': 'unknown', 'running': unit_active,
+                             'message': 'Could not read the last result.'})
+
+    # The unit's own state is the authority on whether it is STILL running.
+    # A process killed mid-run leaves status="running" in the file forever,
+    # which would otherwise block every future press on idempotency.
+    state['running'] = unit_active
+    if state.get('status') == 'running' and not unit_active:
+        state['status'] = 'failed'
+        state['message'] = 'The scan stopped before finishing. Safe to try again.'
+    return JSONResponse(state)
+
+
+def _find_trade_unit_active():
+    """systemctl is-active -- readable unprivileged, no sudo needed."""
+    try:
+        result = subprocess.run(['systemctl', 'is-active', config.FIND_TRADE_UNIT],
+                                 capture_output=True, text=True, timeout=10)
+        return result.stdout.strip() in ('active', 'activating')
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.error(f"[dashboard] Could not query {config.FIND_TRADE_UNIT}: {e}")
+        return False
+
+
+async def find_trade_trigger(request):
+    """Start one on-demand scan. The fleet's first route that spends money.
+
+    Three guards, because a session cookie alone is not enough for something
+    that places a real order:
+      - rate limit, same as /api/login
+      - step-up: the password is re-entered for THIS action, so a stolen or
+        replayed cookie cannot start a trading session on its own
+      - idempotency: a double-click must be rejected, not run twice
+    """
+    account_id = request.path_params['account_id']
+    if account_id != config.FIND_TRADE_ACCOUNT:
+        return JSONResponse({'error': 'no on-demand scan for this account'}, status_code=404)
+
+    ip = request.client.host if request.client else 'unknown'
+    if not auth.check_rate_limit(ip):
+        return JSONResponse({'error': 'too many attempts'}, status_code=429)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not auth.verify_password(body.get('password', ''), config.DASHBOARD_PASSWORD_HASH):
+        auth.record_failed_attempt(ip)
+        logger.warning(f"[dashboard] find-trade refused: bad step-up password from {ip}")
+        return JSONResponse({'error': 'password required'}, status_code=401)
+
+    if _find_trade_unit_active():
+        return JSONResponse({'error': 'a scan is already running'}, status_code=409)
+
+    try:
+        result = subprocess.run(
+            ['sudo', '-n', 'systemctl', 'start', config.FIND_TRADE_UNIT],
+            capture_output=True, text=True, timeout=20)
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.error(f"[dashboard] Could not start {config.FIND_TRADE_UNIT}: {e}")
+        return JSONResponse({'error': 'could not start the scan'}, status_code=502)
+
+    if result.returncode != 0:
+        logger.error(f"[dashboard] {config.FIND_TRADE_UNIT} start failed: {result.stderr.strip()[:300]}")
+        return JSONResponse({'error': 'could not start the scan'}, status_code=502)
+
+    logger.info(f"[dashboard] on-demand scan triggered for {account_id} by {ip}")
+    return JSONResponse({'ok': True, 'message': 'Scanning...'})
+
+
 async def index(request):
     return FileResponse(STATIC_DIR / 'index.html')
 
@@ -541,6 +631,8 @@ routes = [
     Route('/api/accounts/{account_id}/orders', account_orders),
     Route('/api/accounts/{account_id}/trades', closed_trades),
     Route('/api/accounts/{account_id}/readiness', account_readiness),
+    Route('/api/accounts/{account_id}/find-trade', find_trade_trigger, methods=['POST']),
+    Route('/api/accounts/{account_id}/find-trade-status', find_trade_status),
     Route('/api/agents-overview', agents_overview),
     Route('/api/research-agent/decisions', research_agent_decisions),
     Route('/api/issues', issues),

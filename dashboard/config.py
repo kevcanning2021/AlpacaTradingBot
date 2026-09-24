@@ -122,6 +122,21 @@ CLOSED_TRADES_PATHS = {
 # path, used by the readiness panel's code-stability criterion. Explicit
 # rather than inferred from git: see live_readiness._days_since_last_bug
 # for why grepping commit messages was materially wrong.
+# The fleet's first WRITE capability (2026-09-24): a button that runs one
+# on-demand trading scan on the Sofi account. Nova's code, Nova's M1/M5/H1/H2
+# timeframes, but triggered by a person instead of a poll loop.
+#
+# The unit is a systemd oneshot; the dashboard (unprivileged, alpacadash) may
+# start it via a sudoers rule scoped to exactly this one command. It may NOT
+# stop or restart anything, and cannot touch the always-on bots.
+FIND_TRADE_UNIT = os.getenv('FIND_TRADE_UNIT', 'nova-sofi-find-trade.service')
+FIND_TRADE_STATE_PATH = os.getenv('FIND_TRADE_STATE_PATH',
+                                   '/opt/nova-sofi/data/find_trade_state.json')
+# Which dashboard account the button belongs to. Keyed like every other
+# per-account path here so the route can reject a request aimed elsewhere
+# rather than silently trading the wrong balance.
+FIND_TRADE_ACCOUNT = os.getenv('FIND_TRADE_ACCOUNT', 'sofi')
+
 BUG_HISTORY_PATH = os.getenv('BUG_HISTORY_PATH',
                               os.path.join(os.path.dirname(__file__), 'bug_history.json'))
 
