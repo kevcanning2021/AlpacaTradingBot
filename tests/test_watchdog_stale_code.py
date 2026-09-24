@@ -50,6 +50,32 @@ class StaleCodeTests(unittest.TestCase):
         self.assertEqual(key, 'stale_code:fake.service')
         self.assertIn('systemctl restart', msg)
 
+    def test_a_same_second_deploy_is_not_reported_as_stale(self):
+        """systemd reports ActiveEnterTimestamp to the SECOND; mtimes carry
+        sub-second precision. A pull-then-restart inside one second therefore
+        reads backwards -- a file written at 15:40:03.293 looks NEWER than a
+        process systemd records as starting at 15:40:03. Seen live on
+        2026-09-24 with a 0.3s "gap", on a service that was perfectly current.
+
+        The grace period did not catch it: that measured how long ago the FILE
+        changed, not how far the file is ahead of the PROCESS, so an hour-old
+        file 0.3s newer than the process passed both tests."""
+        now = datetime.now(timezone.utc)
+        started = now - timedelta(hours=1)
+        self._set_mtime(self.pyfile, started + timedelta(milliseconds=300))
+        with patch.object(watchdog, '_service_started_at', return_value=started):
+            self.assertEqual(watchdog.check_stale_code(now=now), [])
+
+    def test_a_gap_just_past_the_tolerance_still_alerts(self):
+        """The tolerance must not swallow the real case. A file a few minutes
+        ahead of its process is a genuine missed restart."""
+        now = datetime.now(timezone.utc)
+        started = now - timedelta(hours=2)
+        self._set_mtime(self.pyfile,
+                        started + timedelta(seconds=watchdog.STALE_CODE_MIN_GAP_SECONDS + 120))
+        with patch.object(watchdog, '_service_started_at', return_value=started):
+            self.assertEqual(len(watchdog.check_stale_code(now=now)), 1)
+
     def test_silent_when_the_process_is_newer_than_the_code(self):
         now = datetime.now(timezone.utc)
         self._set_mtime(self.pyfile, now - timedelta(hours=30))

@@ -92,6 +92,22 @@ SERVICE_REPOS = {
 # plausible deploy -- one watchdog cycle.
 STALE_CODE_GRACE_MINUTES = 15
 
+# systemd reports ActiveEnterTimestamp to the SECOND; file mtimes carry
+# sub-second precision. A deploy that pulls and restarts inside the same
+# second therefore looks backwards: strategy.py written at 15:40:03.293 reads
+# as NEWER than a process systemd records as starting at 15:40:03, and the
+# check cries stale on a service that is perfectly current. Observed exactly
+# that on 2026-09-24 with a 0.3 second "gap".
+#
+# The grace period alone did not catch it, because it measured how long ago
+# the FILE changed rather than how far the file is ahead of the PROCESS --
+# an hour-old file 0.3s newer than the process passed both tests.
+#
+# 60s comfortably covers the truncation and any sane pull-then-restart
+# ordering, while still catching the real case this exists for: a file edited
+# and never deployed, which is hours or days ahead, not seconds.
+STALE_CODE_MIN_GAP_SECONDS = 60
+
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 
 
@@ -717,8 +733,9 @@ def check_stale_code(now=None):
             continue
         if started is None or changed is None:
             continue  # not running (check_services covers that), or not a repo
-        if changed <= started:
-            continue
+        gap_seconds = (changed - started).total_seconds()
+        if gap_seconds <= STALE_CODE_MIN_GAP_SECONDS:
+            continue  # same-second deploy, or genuinely already applied
         behind_h = (now - changed).total_seconds() / 3600
         if behind_h * 60 < STALE_CODE_GRACE_MINUTES:
             continue  # a deploy in progress, not a stuck one
