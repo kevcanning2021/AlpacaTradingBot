@@ -260,3 +260,38 @@ gets them, not just whoever's driving a particular session.
     well-evidenced, specific narrative — and the thing that exposed it was
     printing the raw per-service numbers instead of trusting the check's
     own verdict.
+
+
+29. **Automation that "fixes" state must be able to tell a fault from a
+    decision — and `disabled` is how a person says it was a decision.**
+    The user ran `systemctl disable --now sofi-bot` as a planned
+    switchover, exactly as instructed. Seventy-eight seconds later an
+    automated sweep read "inactive" as a crash and restarted it. Left
+    alone, `check_services` would then have escalated the re-stopped unit
+    to their phone 45 minutes on. Two separate pieces of automation
+    arguing with the owner about one decision they had already made and
+    communicated — and the second would have arrived as an alert blaming
+    the fleet for the state the fleet had just fought them to undo.
+
+    The self-healing logic was right in isolation: a service that should
+    be running and is not should be restarted. What was missing was any
+    way to know whether it *should* be running. "Is it active?" answers a
+    different question from "is it meant to be active?", and only the
+    second justifies acting. systemd already records the answer;
+    `is-enabled` had simply never been consulted.
+
+    The give-away that this was coming: the fix was a hand-maintained
+    exclusion list. Three retired units were named in a comment so the
+    check would skip them, which worked until a fourth was retired by
+    someone who did not know the comment existed. Every exception list is
+    a bet that whoever changes the system next will also remember to
+    change the list. `is-enabled` cannot rot, because retiring the unit
+    *is* the update.
+
+    Generally: before automatically correcting any state, establish that
+    the current state was not chosen. Restarting a stopped service,
+    re-enabling a disabled feature, recreating a deleted file, reverting
+    an edit — each is only a repair if nobody meant it. Otherwise it is
+    the machine overruling a human, which is far worse than the fault it
+    thought it was fixing, and much harder to notice because everything
+    afterwards looks healthy.

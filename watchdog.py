@@ -421,17 +421,50 @@ def queue_for_agent(entries, now=None):
         print(f"queue_for_agent failed: {e}")
 
 
+def _enabled_states():
+    """{unit: is-enabled state} for SERVICES, in one subprocess call.
+
+    Like is-active, systemctl is-enabled accepts multiple units and prints one
+    line per unit in order, regardless of exit code.
+    """
+    try:
+        result = subprocess.run(['systemctl', 'is-enabled'] + SERVICES,
+                                 capture_output=True, text=True, timeout=15)
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    return dict(zip(SERVICES, result.stdout.splitlines()))
+
+
 def check_services():
     # systemctl is-active accepts multiple units and prints one status line per unit,
     # in the given order, regardless of exit code -- one subprocess spawn instead of
     # one per service (confirmed live: a mix of active/inactive units still lists all
     # statuses in order).
+    #
+    # A DISABLED unit that is not running is correct, not a fault. `disabled`
+    # means a person deliberately retired it, and alerting on that fights the
+    # decision rather than reporting a problem. Added 2026-09-24 after exactly
+    # that: the user ran `systemctl disable --now sofi-bot` as a planned
+    # switchover, an automated sweep read "inactive" as a crash and restarted
+    # it 78 seconds later, and this check would then have escalated the
+    # re-stopped unit to their phone 45 minutes on -- the fleet arguing with
+    # its owner in two different ways about one decision they had already made.
+    #
+    # This also replaces the hand-maintained exclusion list that used to carry
+    # alpaca-bot-test, alpaca-telegram-bot and pdt15rev-bot: every one of those
+    # is stopped AND disabled, so the state of the unit now says what a comment
+    # used to have to. A list of exceptions rots (see LESSONS 26); asking the
+    # system is self-maintaining.
     issues = []
     result = subprocess.run(['systemctl', 'is-active'] + SERVICES, capture_output=True, text=True)
     statuses = result.stdout.splitlines()
+    enabled = _enabled_states()
     for svc, status in zip(SERVICES, statuses):
-        if status != 'active':
-            issues.append((f'service_down:{svc}', f'{svc} is "{status}", not active'))
+        if status == 'active':
+            continue
+        if enabled.get(svc) == 'disabled':
+            continue  # deliberately retired -- see above
+        issues.append((f'service_down:{svc}', f'{svc} is "{status}", not active'))
     return issues
 
 
