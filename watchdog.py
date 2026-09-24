@@ -73,8 +73,12 @@ SERVICES = [
     # Nova's code against Main's ~$100k paper account to find out whether that
     # edge is real at size, or was just three lucky overnight META gaps.
     # Leaving alpaca-bot in this list would alert every run now it is off.
+    # sofi-bot.service retired 2026-09-24 (disabled; check_services skips
+    # disabled units by design, so leaving it here would have been harmless
+    # but untrue). The Sofi ACCOUNT is now traded by nova-sofi.service -- a
+    # plain clone of trading-2-0, same code and parameters, different account.
     'nova-main.service', 'alpaca-dashboard.service',
-    'sofi-bot.service', 'trading-2-0.service',
+    'nova-sofi.service', 'trading-2-0.service',
 ]
 # Units whose running process is compared against their repo's newest CODE
 # commit -- see check_stale_code(). Deliberately separate from SERVICES (which
@@ -82,7 +86,7 @@ SERVICES = [
 # neither of those can see the gap this closes.
 SERVICE_REPOS = {
     'trading-2-0.service': '/opt/trading-2-0',
-    'sofi-bot.service': '/opt/sofi-bot',
+    'nova-sofi.service': '/opt/nova-sofi',
     'nova-main.service': '/opt/nova-main',
     'alpaca-dashboard.service': '/opt/alpaca-dashboard',
 }
@@ -297,7 +301,12 @@ ACCOUNTS = {
     # changed 2026-09-02 (pdt15rev-bot retired -> sofi-bot, see SERVICES).
     'sofi': {
         'label': 'SOFI',
-        'log_unit': 'sofi-bot.service',
+        # Same Alpaca account; the bot trading it changed 2026-09-24 from
+        # sofi-bot.service (retired, 2 trades in its entire life) to
+        # nova-sofi.service. Pointing this at the dead unit would scan a
+        # journal that never gets another line -- i.e. report perfect health
+        # forever, the same trap Main's entry had.
+        'log_unit': 'nova-sofi.service',
         'api_key': os.getenv('ALPACA_API_KEY_SOFI', ''),
         'secret_key': os.getenv('ALPACA_SECRET_KEY_SOFI', ''),
     },
@@ -315,7 +324,7 @@ ACCOUNTS = {
 # no cross-account auth is needed to read them, just the path.
 RESEARCH_AGENT_DECISIONS_PATHS = {
     'production': '/opt/nova-main/data/research_decisions.json',  # nova-main since 2026-09-23
-    'sofi': '/opt/sofi-bot/agent_decisions_state.json',
+    'sofi': '/opt/nova-sofi/data/research_decisions.json',  # nova-sofi since 2026-09-24
     'trading2': '/opt/trading-2-0/data/research_decisions.json',
 }
 
