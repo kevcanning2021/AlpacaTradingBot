@@ -48,6 +48,10 @@
     {
       "date": "2026-09-24",
       "what": "Stops are enforced by the 60s poll loop, not resting at the broker, so 89% of losing trades exit BEYOND their stop -- mean 1.61x planned risk (median 1.14x, worst 7.94x). The bot's stated 0.5% risk per trade is therefore wrong by ~61%, and break-even win rate rises from 35.7% to 47.2% against an observed 41.7%. Found at size on nova-main day one."
+    },
+    {
+      "date": "2026-09-24",
+      "what": "await_fill returned on the FIRST PARTIAL rather than waiting for a terminal status, so a large order filling in stages had its first slice journalled as the whole trade. 7 of 9 rows on the $100k account were wrong -- MSFT 20.0 against an actual 49.92, TSLA 42.0 against 65.73 -- and one trade was recorded as a $19 LOSS when it was a $265 WIN. Closed P&L read +$29.97 against a real +$213.30. Invisible at $50 (a $12 order fills in one tick); only orders worth thousands fill in stages."
     }
   ],
   "sofi": [
@@ -92,6 +96,10 @@
     {
       "date": "2026-09-24",
       "what": "Stops are enforced by the 60s poll loop, not resting at the broker, so 89% of losing trades exit BEYOND their stop -- mean 1.61x planned risk (median 1.14x, worst 7.94x). The bot's stated 0.5% risk per trade is therefore wrong by ~61%, and break-even win rate rises from 35.7% to 47.2% against an observed 41.7%. Found at size on nova-main day one."
+    },
+    {
+      "date": "2026-09-24",
+      "what": "await_fill returned on the FIRST PARTIAL rather than waiting for a terminal status, so a large order filling in stages had its first slice journalled as the whole trade. 7 of 9 rows on the $100k account were wrong -- MSFT 20.0 against an actual 49.92, TSLA 42.0 against 65.73 -- and one trade was recorded as a $19 LOSS when it was a $265 WIN. Closed P&L read +$29.97 against a real +$213.30. Invisible at $50 (a $12 order fills in one tick); only orders worth thousands fill in stages."
     }
   ]
 }
