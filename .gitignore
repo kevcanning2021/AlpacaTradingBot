@@ -15,3 +15,4 @@ venv/
 *.bak-*
 *.bak
 zero_since_state.json
+agent_review_queue.jsonl

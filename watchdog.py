@@ -95,6 +95,13 @@ STALE_CODE_GRACE_MINUTES = 15
 ALERT_COOLDOWN_SECONDS = 2 * 60 * 60
 
 
+# Advisory alerts are written here instead of being sent to the user's phone.
+# The agent sweep reads this; the user should not be the fleet's error
+# reporting channel. Urgent alerts still go to Telegram AND land here.
+AGENT_REVIEW_QUEUE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   'agent_review_queue.jsonl')
+
+
 def is_advisory(key):
     """True for alert classes that describe something to REVIEW, not something
     breaking right now.
@@ -344,6 +351,30 @@ def load_state():
 def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
+
+
+def queue_for_agent(entries, now=None):
+    """Append alerts to the agent review queue (never raises).
+
+    Deliberately best-effort: a failure to write this file must not stop the
+    Telegram path or lose the state save. An unwritten queue line costs one
+    missed review; an exception here would cost the whole watchdog run.
+    """
+    if not entries:
+        return
+    now = now or datetime.now(timezone.utc)
+    try:
+        with open(AGENT_REVIEW_QUEUE, 'a') as f:
+            for severity, key, message in entries:
+                f.write(json.dumps({
+                    'ts': now.isoformat(),
+                    'severity': severity,
+                    'key': key,
+                    'bot': bot_for_key(key),
+                    'message': message,
+                }) + chr(10))
+    except OSError as e:
+        print(f"queue_for_agent failed: {e}")
 
 
 def check_services():
@@ -781,7 +812,8 @@ def main():
     # the dashboard always reflects the latest detail even between pings; 'first_seen'
     # is preserved across cooldown cycles so the dashboard can show how long an issue
     # has been active, not just when it was last announced.
-    messages = []
+    messages = []        # urgent only -- these still reach the user's phone
+    queued = []          # everything newly announced, for the agent sweep
     for key, msg in all_issues:
         existing = active.get(key) if isinstance(active.get(key), dict) else None
         first_seen = existing['first_seen'] if existing else now.isoformat()
@@ -800,7 +832,16 @@ def main():
                 and existing.get('message') == msg):
             should_alert = False
         if should_alert:
-            messages.append(msg if last_alert_at is None else f'[STILL ACTIVE] {msg}')
+            line = msg if last_alert_at is None else f'[STILL ACTIVE] {msg}'
+            # The user is not the fleet's error-reporting channel. Advisory
+            # alerts go only to the agent queue; urgent ones go to both, so a
+            # genuinely broken bot still reaches a human immediately even if
+            # no agent session is running.
+            if is_advisory(key):
+                queued.append(('advisory', key, line))
+            else:
+                messages.append(line)
+                queued.append(('urgent', key, line))
             last_alert_at = now.isoformat()
         active[key] = {'first_seen': first_seen, 'last_alert_at': last_alert_at, 'message': msg, 'bot': bot_for_key(key)}
 
@@ -810,6 +851,11 @@ def main():
 
     if messages:
         TelegramNotifier().send('AlpacaTradingBot Watchdog', '\n\n'.join(messages))
+        # Every newly announced alert -- urgent or advisory -- also lands in
+        # the agent review queue, which is what the sweep reads. The user is
+        # not the fleet's error-reporting channel.
+
+    queue_for_agent(queued, now=now)
 
     state['active_alerts'] = active
     state['seen_order_ids'] = list(seen_order_ids)
