@@ -295,3 +295,67 @@ gets them, not just whoever's driving a particular session.
     the machine overruling a human, which is far worse than the fault it
     thought it was fixing, and much harder to notice because everything
     afterwards looks healthy.
+
+
+30. **The repeated mistake in this project is substituting a proxy that
+    CORRELATES with the answer for the thing that IS the answer -- and the
+    proxy is right often enough to feel verified.**
+    Four instances inside two days, every one producing a confident,
+    specific, wrong result that was reported before it was checked:
+
+    - "Is the deployed code current?" answered with the newest COMMIT date
+      instead of the newest file MTIME. Produced a precise narrative -- the
+      service restarted 23 seconds before the fix landed -- that was
+      entirely false. The file predated the restart by sixty seconds; only
+      the `git commit` came afterwards. (LESSONS 28.)
+    - "Has this service outrun its code?" answered by how long ago the file
+      changed instead of how far the file leads the PROCESS. An hour-old
+      file 0.3s newer than its process passed every test and alerted.
+    - "Which broker order matches this journal row?" answered by ORDINAL
+      position per symbol instead of by time, silently pulling in orders
+      belonging to the retired alpaca-bot and reporting a QQQ loss that
+      never happened.
+    - "When did this unit start?" asked of ActiveEnterTimestampUSec, a
+      property this systemd does not expose. It returned an empty string,
+      which became None, which the caller skipped -- so the check reported
+      zero issues while measuring nothing at all.
+
+    The common shape: the proxy is cheaper to obtain, agrees with the truth
+    in the common case, and fails precisely in the case being investigated.
+    Agreement in the easy cases is what supplies the false confidence.
+
+    **What caught all four was the same move: printing the raw per-item
+    numbers instead of trusting the check's own verdict.** The commit-vs-file
+    error surfaced from a per-service table of timestamps; the ordinal-match
+    error from a per-row table of quantities. In both the summary line looked
+    reasonable and the underlying rows did not.
+
+    So before reporting any derived conclusion: state which quantity actually
+    answers the question, confirm that is the quantity being read, and print
+    the rows. A verdict is not evidence -- it is a claim about evidence, and
+    the whole class of bug here is a verdict computed from the wrong column.
+
+31. **Bound the blast radius of any bulk operation before running it --
+    range deletes, recursive copies, and `add -A` all failed the same way.**
+    Three instances, same root:
+
+    - Deleting a span of source between two anchors, where the far anchor
+      was chosen by name rather than by checking what lay between. It
+      removed two unrelated request handlers along with the target. Caught
+      instantly by an import error, which was luck: had they been rarely
+      called it would have shipped.
+    - `rm -rf dir && cp -r backup dir` run as root to restore a directory.
+      It restored the CONTENTS correctly and silently changed every file's
+      owner to root, so the service -- which runs unprivileged -- could no
+      longer read its own credentials file. Four minutes of downtime from an
+      operation that "only" restored a backup.
+    - `git add -A` immediately after a coverage run, which swept a 53KB
+      binary artefact into the commit and then generated a drift advisory on
+      every sweep afterwards.
+
+    Each command did exactly what it was told. The error was never the
+    command, it was not enumerating what it would touch first. For a range
+    delete, list what sits between the anchors. For a recursive copy, check
+    ownership and mode, not just content. For `add -A`, run `git status`
+    and read it rather than assuming the working tree contains only what you
+    put there.
