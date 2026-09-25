@@ -389,17 +389,22 @@ def _load_active_alerts(path, source):
 
 async def issues(request):
     """Surfaces currently-active issues from the fleet watchdog (service down,
-    new log errors, git drift, stop-loss breaches, unattributed orders) and
-    Main's strategy_check.py (stuck-sell signal health, daily backtest/
-    forward-test regressions -- merged in 2026-09-01, previously Telegram-only
-    and invisible here) so they're visible on the dashboard itself, not just as
-    a Telegram ping someone might miss. Reads each component's own state file
+    new log errors, git drift, stop-loss breaches, unattributed orders) so
+    they're visible on the dashboard itself, not just as a Telegram ping
+    someone might miss. Main's strategy_check.py was merged in here too from
+    2026-09-01 until 2026-09-25, when the bot it belongs to turned out to have
+    been retired for two days while its alerts kept arriving about live
+    positions it no longer governs. Reads each component's own state file
     rather than re-implementing any detection here -- one place decides what
     counts as an issue, the dashboard just displays it. An empty/missing file
     is a normal 'nothing wrong' state, not an error."""
     def _load():
+        # strategy_check.py is NOT read here any more -- see
+        # config.STRATEGY_CHECK_STATE_PATH. It belongs to the retired
+        # alpaca-bot and judges live positions by rules nothing runs, which
+        # produced a false "may not be closing it" alert about a correctly
+        # protected nova-main position.
         flat = _load_active_alerts(config.WATCHDOG_STATE_PATH, 'watchdog')
-        flat += _load_active_alerts(config.STRATEGY_CHECK_STATE_PATH, 'strategy_check')
         flat.sort(key=lambda i: i['first_seen'] or '', reverse=True)
         return flat
 

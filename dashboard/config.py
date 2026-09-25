@@ -24,10 +24,28 @@ WATCHDOG_STATE_PATH = os.getenv(
 
 # Same shape/purpose as WATCHDOG_STATE_PATH above, added 2026-09-01 -- Main's
 # strategy_check.py (stuck-sell signal health, daily backtest/forward-test
-# regressions) keeps its own active_alerts in its own state file and was
-# previously Telegram-only, invisible here. Its active_alerts entries now match
-# watchdog's {first_seen, last_alert_at, message} shape so _load_active_alerts
-# can read both the same way.
+# regressions) keeps its own active_alerts in its own state file, in watchdog's
+# {first_seen, last_alert_at, message} shape so _load_active_alerts reads both
+# the same way.
+#
+# NO LONGER MERGED INTO /api/issues, 2026-09-25. strategy_check.py belongs to
+# the RETIRED alpaca-bot and evaluates ITS dual-signal Bollinger/RSI rules --
+# which nothing runs any more. Its alerts are therefore judgements about a
+# strategy that does not govern the positions they name, and it was raising
+# exactly that: "TSLA has shown a SELL signal for 19 consecutive hourly checks
+# while still held -- scheduler may not be closing it", about a position
+# nova-main holds deliberately under Nova's rules, correctly journalled with a
+# stop and sitting near its TARGET. A false alert claiming a position may be
+# unprotected is worse than no alert, because it is the one kind the user must
+# be able to trust. The other entry was 'crypto backtest expectancy went
+# negative ... crypto trading is currently paused', last raised 2026-09-23 --
+# true of the retired bot, meaningless for the live fleet.
+#
+# The capability itself is not lost: daily_fleet_audit.py covers backtest and
+# forward-test regression, drift and stop distance for all three live bots, and
+# watchdog.py covers stuck vetoes and service health. Kept here (not deleted)
+# because the path is still the right one should that checker ever be rewritten
+# against Nova's strategy.
 STRATEGY_CHECK_STATE_PATH = os.getenv(
     'STRATEGY_CHECK_STATE_PATH', '/opt/alpaca-bot/strategy_check_state.json'
 )
@@ -91,9 +109,18 @@ def journal_db_path(account_id):
 # threshold drift detection, and how close each open position is to its
 # stop. Read directly like the paths above -- same non-Alpaca-data pattern,
 # one file per bot's own process.
+#
+# Repointed 2026-09-25. 'main' and 'sofi' still named the RETIRED bots' repos,
+# so this panel had been showing the dead scanners' audits under the live
+# accounts since 2026-09-23/24: Main's forward test read "5 real closed trades,
+# $+15.80" (alpaca-bot's lifetime record) when nova-main had 8 closed trades and
+# -8.39R, and Sofi's read 2 trades and ADI/COST/UBER positions from a watchlist
+# nova-sofi does not trade. CLOSED_TRADES_PATHS and PEAK_PRICES_PATHS were
+# walked when those bots retired; these two were missed, and they fail in the
+# reassuring direction -- a frozen audit of a dead bot reads as stability.
 FLEET_AUDIT_LOG_PATHS = {
-    'main': os.getenv('FLEET_AUDIT_LOG_PATH_MAIN', '/opt/alpaca-bot/fleet_audit_log.json'),
-    'sofi': os.getenv('FLEET_AUDIT_LOG_PATH_SOFI', '/opt/sofi-bot/fleet_audit_log.json'),
+    'main': os.getenv('FLEET_AUDIT_LOG_PATH_MAIN', '/opt/nova-main/fleet_audit_log.json'),
+    'sofi': os.getenv('FLEET_AUDIT_LOG_PATH_SOFI', '/opt/nova-sofi/fleet_audit_log.json'),
     'nova': os.getenv('FLEET_AUDIT_LOG_PATH_NOVA', '/opt/trading-2-0/fleet_audit_log.json'),
 }
 
