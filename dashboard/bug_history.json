@@ -23,8 +23,13 @@
     "was retired and Main's account is traded by /opt/nova-main, a clone of",
     "/opt/trading-2-0 at the same commit. So a bug found in Nova's code is a",
     "bug in Main's code too, and must be logged under BOTH keys -- they are",
-    "two deployments, not two codebases. Only 'sofi' still has a codebase of",
-    "its own. The pre-2026-09-23 'prod' entries below belong to the retired",
+    "two deployments, not two codebases.",
+    "",
+    "2026-09-24: SOFI JOINED THEM. sofi-bot was retired and Sofi's account is",
+    "traded by /opt/nova-sofi, a plain clone at the same commit. All THREE keys",
+    "now describe ONE codebase, so a bug in it is logged under all three.",
+    "",
+    "The pre-2026-09-23 'prod' entries below belong to the retired",
     "dual-signal scanner and are kept as history, not as a claim about the",
     "code running there now."
   ],
@@ -52,6 +57,10 @@
     {
       "date": "2026-09-24",
       "what": "await_fill returned on the FIRST PARTIAL rather than waiting for a terminal status, so a large order filling in stages had its first slice journalled as the whole trade. 7 of 9 rows on the $100k account were wrong -- MSFT 20.0 against an actual 49.92, TSLA 42.0 against 65.73 -- and one trade was recorded as a $19 LOSS when it was a $265 WIN. Closed P&L read +$29.97 against a real +$213.30. Invisible at $50 (a $12 order fills in one tick); only orders worth thousands fill in stages."
+    },
+    {
+      "date": "2026-09-24",
+      "what": "The EXIT path journalled the price that TRIGGERED the exit, not the price it FILLED at. close_position() returns on ACCEPTANCE, when filled_avg_price is still None nearly every time, so `filled_avg_price if not None else last_price` was not a rare fallback -- it was the path, and it wrote the 1-minute bar close. Every closed row this code ever wrote was affected: 61 of 66 on the $50 account, 1 of 1 on Sofi (378.380 against a real 378.480). The $100k account's 8 rows were already correct, having been rebuilt from broker fills by the partial-fill repair the day before. Repaired by reconcile_exit_prices.py; the entry path had been fixed for this same class of error twice already, the exit path writing the same column had not. Separately surfaced by the repair: 7 exits were detected outside regular hours and did not fill until the opening bell 36-87 minutes later (TSLA -$2.50, META +$4.16), so the stop is not enforceable overnight."
     }
   ],
   "sofi": [
@@ -66,6 +75,10 @@
     {
       "date": "2026-09-23",
       "what": "research_agent 'crash' vetoed index ETFs on bullish market-crash headlines; _INDEX_ETF_TICKERS needs 2+ tags and this was tagged to SPY alone"
+    },
+    {
+      "date": "2026-09-24",
+      "what": "The EXIT path journalled the price that TRIGGERED the exit, not the price it FILLED at. close_position() returns on ACCEPTANCE, when filled_avg_price is still None nearly every time, so `filled_avg_price if not None else last_price` was not a rare fallback -- it was the path, and it wrote the 1-minute bar close. Every closed row this code ever wrote was affected: 61 of 66 on the $50 account, 1 of 1 on Sofi (378.380 against a real 378.480). The $100k account's 8 rows were already correct, having been rebuilt from broker fills by the partial-fill repair the day before. Repaired by reconcile_exit_prices.py; the entry path had been fixed for this same class of error twice already, the exit path writing the same column had not. Separately surfaced by the repair: 7 exits were detected outside regular hours and did not fill until the opening bell 36-87 minutes later (TSLA -$2.50, META +$4.16), so the stop is not enforceable overnight."
     }
   ],
   "trading2": [
@@ -100,6 +113,10 @@
     {
       "date": "2026-09-24",
       "what": "await_fill returned on the FIRST PARTIAL rather than waiting for a terminal status, so a large order filling in stages had its first slice journalled as the whole trade. 7 of 9 rows on the $100k account were wrong -- MSFT 20.0 against an actual 49.92, TSLA 42.0 against 65.73 -- and one trade was recorded as a $19 LOSS when it was a $265 WIN. Closed P&L read +$29.97 against a real +$213.30. Invisible at $50 (a $12 order fills in one tick); only orders worth thousands fill in stages."
+    },
+    {
+      "date": "2026-09-24",
+      "what": "The EXIT path journalled the price that TRIGGERED the exit, not the price it FILLED at. close_position() returns on ACCEPTANCE, when filled_avg_price is still None nearly every time, so `filled_avg_price if not None else last_price` was not a rare fallback -- it was the path, and it wrote the 1-minute bar close. Every closed row this code ever wrote was affected: 61 of 66 on the $50 account, 1 of 1 on Sofi (378.380 against a real 378.480). The $100k account's 8 rows were already correct, having been rebuilt from broker fills by the partial-fill repair the day before. Repaired by reconcile_exit_prices.py; the entry path had been fixed for this same class of error twice already, the exit path writing the same column had not. Separately surfaced by the repair: 7 exits were detected outside regular hours and did not fill until the opening bell 36-87 minutes later (TSLA -$2.50, META +$4.16), so the stop is not enforceable overnight."
     }
   ]
 }
