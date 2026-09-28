@@ -43,6 +43,7 @@ State is kept in a small JSON file so:
 """
 import json
 import os
+import sqlite3
 import re
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -152,7 +153,7 @@ def is_advisory(key):
     the agent's problem to fix, not the account owner's to be told about.
     """
     return (key.startswith(('log_errors:', 'git_drift:', 'stale_code:',
-                             'watchdog_internal_error:'))
+                             'watchdog_internal_error:', 'sample_review:'))
             or ':stuck_veto:' in key
             or ':bot_order:' in key
             or ':api_error:' in key
@@ -820,6 +821,45 @@ def check_secrets_hygiene():
     return issues
 
 
+# Sample-size review triggers, set during the full three-bot review on 2026-09-28.
+# Sofi was 1 win in 8 trades (-17.8R, profit factor 0.11) -- genuinely bad, but n=8
+# cannot separate a broken bot from an unlucky one, so the call was to leave it live
+# and revisit at n=30 rather than act on eight trades. A decision deferred to "later"
+# with no mechanism is a decision quietly dropped: this makes the revisit fire on its
+# own. Advisory only (see is_advisory) -- it is the agent's cue to run the review, not
+# something to wake the account owner for.
+SAMPLE_REVIEW_THRESHOLDS = {
+    'sofi': ('/opt/nova-sofi/data/trade_journal.db', 30, 'SOFI'),
+}
+
+
+def check_sample_size_reviews():
+    """Fires once a bot under deferred judgement reaches the trade count its review
+    was postponed to. Opened read-only so this can never touch a live journal."""
+    issues = []
+    for key, (db_path, threshold, label) in SAMPLE_REVIEW_THRESHOLDS.items():
+        try:
+            if not os.path.exists(db_path):
+                continue
+            conn = sqlite3.connect('file:%s?mode=ro' % db_path, uri=True)
+            try:
+                closed = conn.execute(
+                    'SELECT COUNT(*) FROM trades WHERE exit_price IS NOT NULL').fetchone()[0]
+            finally:
+                conn.close()
+        except Exception as e:
+            issues.append((f'sample_review:{key}:read_error',
+                           f'[{label}] could not read the journal for its sample-size review check: {e}'))
+            continue
+        if closed >= threshold:
+            issues.append((f'sample_review:{key}:n{threshold}',
+                           f'[{label}] has reached {closed} closed trades; the review trigger was {threshold}. '
+                           f'The 2026-09-28 fleet review deferred judging this bot at n=8 as too small a sample. '
+                           f'Re-run the per-bot performance review (win rate, avgR, profit factor, train/holdout) '
+                           f'and decide whether it keeps trading as-is.'))
+    return issues
+
+
 def check_account(account_key, label, api_key, secret_key, seen_order_ids):
     """Checks positions and orders independently -- a failure fetching one (e.g. a
     transient Alpaca API timeout) must not skip the other, and must not crash the
@@ -922,6 +962,12 @@ def main():
     except Exception as e:
         print(f"check_secrets_hygiene failed: {e}")
         all_issues.append(('watchdog_internal_error:check_secrets_hygiene', f'watchdog: check_secrets_hygiene crashed: {e}'))
+
+    try:
+        all_issues += check_sample_size_reviews()
+    except Exception as e:
+        print(f"check_sample_size_reviews failed: {e}")
+        all_issues.append(('watchdog_internal_error:check_sample_size_reviews', f'watchdog: check_sample_size_reviews crashed: {e}'))
 
     for account_key, cfg in ACCOUNTS.items():
         try:
