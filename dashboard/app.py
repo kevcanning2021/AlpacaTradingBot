@@ -576,8 +576,21 @@ async def index(request):
     return FileResponse(STATIC_DIR / 'index.html')
 
 
+async def index_v2(request):
+    """The redesigned dashboard, served ALONGSIDE the existing one rather than
+    replacing it (account owner's decision, 2026-09-29).
+
+    This UI is how open positions and active alerts get seen, so swapping it in
+    one step would mean a mistake blinds the fleet until someone notices. '/'
+    keeps working untouched; '/v2' is the new one, and it reads exactly the same
+    read-only endpoints -- no new backend surface, no new credentials.
+    """
+    return FileResponse(STATIC_DIR / 'v2.html')
+
+
 routes = [
     Route('/', index),
+    Route('/v2', index_v2),
     Route('/api/login', login, methods=['POST']),
     Route('/api/logout', logout, methods=['POST']),
     Route('/api/accounts', list_accounts),

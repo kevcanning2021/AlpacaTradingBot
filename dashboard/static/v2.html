@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1017">
+<title>Nova Fleet</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/v2.css">
+</head>
+<body>
+
+<!-- ───────────────────────── login ───────────────────────── -->
+<div id="login" class="login">
+  <form id="login-form" class="login-card">
+    <div class="brand brand-lg"><span class="brand-mark">NV</span> Nova Fleet</div>
+    <p class="login-sub">Read-only monitoring for Main, Nova and Sofi.</p>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Log in</button>
+    <p id="login-error" class="login-error"></p>
+  </form>
+</div>
+
+<!-- ───────────────────────── app ───────────────────────── -->
+<div id="app" class="hidden">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand"><span class="brand-mark">NV</span> Nova&nbsp;Fleet</div>
+      <nav class="nav" id="nav">
+        <button class="nav-item is-active" data-view="overview">Overview</button>
+        <button class="nav-item" data-view="positions">Positions</button>
+        <button class="nav-item" data-view="trades">Trades</button>
+        <button class="nav-item" data-view="alerts">Alerts</button>
+      </nav>
+    </div>
+    <div class="topbar-right">
+      <span id="market-pill" class="pill pill-muted">market …</span>
+      <span id="updated" class="updated"></span>
+      <button id="logout" class="icon-btn" title="Log out" aria-label="Log out">⏻</button>
+    </div>
+  </header>
+
+  <!-- mobile view switcher -->
+  <nav class="nav nav-mobile" id="nav-mobile">
+    <button class="nav-item is-active" data-view="overview">Overview</button>
+    <button class="nav-item" data-view="positions">Positions</button>
+    <button class="nav-item" data-view="trades">Trades</button>
+    <button class="nav-item" data-view="alerts">Alerts</button>
+  </nav>
+
+  <main class="layout">
+
+    <section class="main-col">
+
+      <!-- ── overview ── -->
+      <div class="view" data-view="overview">
+        <h1 class="page-title">Fleet Summary</h1>
+        <div class="tiles" id="tiles">
+          <div class="tile skeleton"></div>
+          <div class="tile skeleton"></div>
+          <div class="tile skeleton"></div>
+        </div>
+
+        <div class="panel chart-panel">
+          <div class="panel-head">
+            <h2>Equity <span class="panel-sub" id="chart-sub"></span></h2>
+            <div class="seg" id="chart-seg">
+              <button class="seg-btn is-active" data-acct="prod">Main</button>
+              <button class="seg-btn" data-acct="trading2">Nova</button>
+              <button class="seg-btn" data-acct="sofi">Sofi</button>
+            </div>
+          </div>
+          <div class="chart-wrap" id="chart-wrap"></div>
+        </div>
+      </div>
+
+      <!-- ── positions ── -->
+      <div class="view hidden" data-view="positions">
+        <h1 class="page-title">Open Positions</h1>
+        <div id="positions-body"></div>
+      </div>
+
+      <!-- ── trades ── -->
+      <div class="view hidden" data-view="trades">
+        <h1 class="page-title">Recent Trades</h1>
+        <div id="trades-body"></div>
+      </div>
+
+      <!-- ── alerts ── -->
+      <div class="view hidden" data-view="alerts">
+        <h1 class="page-title">Alerts &amp; Readiness</h1>
+        <div id="alerts-body"></div>
+      </div>
+
+    </section>
+
+    <!-- ── right rail: live positions, watchlist-style ── -->
+    <aside class="rail">
+      <div class="panel rail-panel">
+        <div class="panel-head"><h2>Live Positions</h2></div>
+        <div id="rail-positions" class="rail-list"></div>
+      </div>
+      <div class="panel rail-panel">
+        <div class="panel-head"><h2>Alerts <span id="alert-count" class="count"></span></h2></div>
+        <div id="rail-alerts" class="rail-list"></div>
+      </div>
+    </aside>
+
+  </main>
+</div>
+
+<script src="/static/v2.js"></script>
+</body>
+</html>
