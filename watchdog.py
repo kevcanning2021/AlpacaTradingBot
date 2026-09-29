@@ -152,7 +152,12 @@ def is_advisory(key):
     channel. watchdog_internal_error belongs here because a broken check is
     the agent's problem to fix, not the account owner's to be told about.
     """
-    return (key.startswith(('log_errors:', 'git_drift:', 'stale_code:',
+    # log_errors is deliberately NOT advisory as of 2026-09-29. A real defect --
+    # an ETH/USD order failing on two bots -- sat unread in the agent queue for 21
+    # hours because it was classed advisory and that queue has no scheduled reader.
+    # A genuine exception inside a trading process is exactly what one push is for,
+    # and it is rare enough not to cry wolf.
+    return (key.startswith(('git_drift:', 'stale_code:', 'stale_code_fixed:',
                              'watchdog_internal_error:', 'sample_review:'))
             or ':stuck_veto:' in key
             or ':bot_order:' in key
@@ -749,15 +754,62 @@ def check_stale_code(now=None):
         behind_h = (now - changed).total_seconds() / 3600
         if behind_h * 60 < STALE_CODE_GRACE_MINUTES:
             continue  # a deploy in progress, not a stuck one
+        # FIX IT, do not just report it. This alert class was 31 of the 76 items
+        # sitting unread in the agent queue on 2026-09-29, and every one said the
+        # same thing: run `systemctl restart <unit>`. An alert whose entire remedy
+        # is one deterministic command, needing no judgement, should not wait on a
+        # human to read a queue. Running stale code is strictly worse than a
+        # ten-second restart.
+        #
+        # Guarded three ways so it cannot become a restart loop:
+        #   - at most one auto-restart per unit per STALE_RESTART_COOLDOWN
+        #   - only while the unit is active; a down unit is check_services'
+        #     problem and restarting it here would mask that
+        #   - the restart is still ANNOUNCED, so the record shows what happened
+        #     instead of the fleet quietly restarting itself
+        if _auto_restart_stale(unit, now):
+            issues.append((
+                f'stale_code_fixed:{unit}',
+                f'{unit} was running code older than its files '
+                f'({behind_h:.1f}h unapplied) and has been RESTARTED automatically. '
+                f'Recorded so the restart is visible; no action needed.'
+            ))
+            continue
         issues.append((
             f'stale_code:{unit}',
             f'{unit} is running code older than its files: process started '
             f'{started:%Y-%m-%d %H:%M}Z, newest .py under {repo} was written '
             f'{changed:%Y-%m-%d %H:%M}Z ({behind_h:.1f}h unapplied). '
-            f'The file on disk is already correct -- Python caches imported '
-            f'modules, so this needs `systemctl restart {unit}` to take effect.'
+            f'An automatic restart was NOT attempted (unit inactive, or one was '
+            f'already tried within the cooldown) -- needs `systemctl restart {unit}`.'
         ))
     return issues
+
+
+# Deliberately long. If a unit keeps going stale every hour, something else is
+# wrong and repeated restarts would hide it rather than fix it.
+STALE_RESTART_COOLDOWN = timedelta(hours=1)
+_LAST_STALE_RESTART = {}
+
+
+def _auto_restart_stale(unit, now):
+    """Restart a unit whose process predates its own code.
+
+    Returns True only if a restart was actually performed."""
+    last = _LAST_STALE_RESTART.get(unit)
+    if last and (now - last) < STALE_RESTART_COOLDOWN:
+        return False
+    try:
+        active = subprocess.run(['systemctl', 'is-active', unit],
+                                 capture_output=True, text=True, timeout=10).stdout.strip()
+        if active != 'active':
+            return False
+        subprocess.run(['systemctl', 'restart', unit], check=True, timeout=60)
+    except Exception as e:
+        print(f'auto-restart of {unit} failed: {e}')
+        return False
+    _LAST_STALE_RESTART[unit] = now
+    return True
 
 
 def check_git_drift():
