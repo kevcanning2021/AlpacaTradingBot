@@ -34,6 +34,13 @@ SILENT_BOT_DAYS = 3           # calendar days with no ENTRY at all
 OVERSIZED_LOSS_R = -2.0       # a stop that failed to cap the loss
 RAPID_REENTRY_MINUTES = 60    # mirrors RiskConfig.reentry_cooldown_minutes
 
+# When the re-entry cooldown actually went live. Re-entries BEFORE this are history
+# the cooldown could not have prevented, and alerting that "the cooldown should have
+# blocked this" about a time when it did not exist is simply a false alarm -- one
+# that would have pinged the phone every 15 minutes for the 24-hour lookback.
+# MOVE THIS if the cooldown is ever disabled and re-enabled.
+COOLDOWN_LIVE_SINCE = '2026-09-30T20:22'
+
 
 def _rows(db_path, sql, params=()):
     """Read-only journal query. Returns None when the journal is absent, so a bot
@@ -127,6 +134,8 @@ def check_rapid_reentry(now=None):
             for prev, nxt in zip(seq, seq[1:]):
                 if prev.get('outcome') != 'loss':
                     continue  # only a LOSS starts a cooldown; re-entry after a win is fine
+                if (nxt.get('entry_time') or '') < COOLDOWN_LIVE_SINCE:
+                    continue  # predates the cooldown; not something it could have stopped
                 a, b = _parse(prev.get('exit_time')), _parse(nxt.get('entry_time'))
                 if a is None or b is None:
                     continue
