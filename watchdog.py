@@ -51,6 +51,7 @@ from datetime import datetime, timedelta, timezone
 from alpaca_client import AlpacaClient
 from telegram_notifier import TelegramNotifier
 from config import settings
+import trading_health
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'watchdog_state.json')
 SERVICES = [
@@ -1035,6 +1036,16 @@ def main():
         print(f"check_secrets_hygiene failed: {e}")
         all_issues.append(('watchdog_internal_error:check_secrets_hygiene', f'watchdog: check_secrets_hygiene crashed: {e}'))
 
+    # Trading health: is each bot actually working, not merely running? Every
+    # check in here is a real incident from the week of 2026-09-24 that was found
+    # days late by a human noticing. See trading_health.py.
+    try:
+        all_issues += trading_health.check_all()
+    except Exception as e:
+        print(f"trading_health.check_all failed: {e}")
+        all_issues.append(('watchdog_internal_error:trading_health',
+                           f'watchdog: trading_health crashed: {e}'))
+
     try:
         all_issues += check_sample_size_reviews()
     except Exception as e:
@@ -1050,6 +1061,18 @@ def main():
         except Exception as e:
             print(f"check_account({account_key}) failed: {e}")
             all_issues.append((f'watchdog_internal_error:check_account:{account_key}', f'watchdog: check_account crashed for {cfg["label"]}: {e}'))
+
+        try:
+            if cfg['api_key'] and cfg['secret_key']:
+                _c = AlpacaClient()
+                _c.api_key = cfg['api_key']
+                _c.secret_key = cfg['secret_key']
+                all_issues += trading_health.check_positions_after_close(
+                    account_key, cfg['label'], _c)
+        except Exception as e:
+            print(f"after-close check failed for {account_key}: {e}")
+            all_issues.append((f'watchdog_internal_error:after_close:{account_key}',
+                               f'watchdog: after-close check crashed for {cfg["label"]}: {e}'))
 
         try:
             all_issues += check_new_log_errors(cfg['log_unit'], last_log_check.get(cfg['log_unit']),
