@@ -576,8 +576,17 @@ def check_new_log_errors(unit, since_iso, error_log=None, now=None):
         cmd += ['-n', '50']
     result = subprocess.run(cmd, capture_output=True, text=True)
     lines = result.stdout.splitlines()
-    bad_lines = [l for l in lines if ('Traceback' in l or 'ERROR' in l)
-                 and not _is_self_recovered_blip(l)]
+    # A logged exception is an ERROR line FOLLOWED BY its traceback. The first
+    # version of this filter suppressed the ERROR line of a self-recovered blip and
+    # then alerted on the twenty traceback lines underneath it, which match on
+    # 'Traceback' all by themselves -- so the blip still woke the phone, which was
+    # the entire thing the filter was added to stop.
+    #
+    # Every logged exception in this fleet goes through logger.exception, which
+    # always emits an ERROR line first. So a traceback with no surviving ERROR line
+    # above it belongs to a suppressed blip, and there is nothing left to report.
+    real_errors = [l for l in lines if 'ERROR' in l and not _is_self_recovered_blip(l)]
+    bad_lines = (real_errors + [l for l in lines if 'Traceback' in l]) if real_errors else []
 
     if error_log is None:
         # Stateless fallback: original behaviour, alert only on a fresh hit.
