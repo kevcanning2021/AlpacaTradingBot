@@ -539,6 +539,25 @@ def check_services():
     return issues
 
 
+# A trading-loop iteration that failed ONCE and carried on is not a defect, it is
+# the network. The runner logs "(N consecutive) -- continuing" and backs off on its
+# own; the first such failure self-recovers on the next 60-second poll.
+#
+# This exists because log_errors was promoted out of the advisory tier on
+# 2026-09-29, so it now reaches the account owner's phone. The very first thing it
+# caught was a single SSL handshake failure to Alpaca at 06:09 on 2026-09-30 --
+# exactly the cry-wolf noise the advisory tier was created to prevent. Promoting the
+# channel without filtering it would have traded one failure mode for the other.
+#
+# Only the FIRST consecutive failure is suppressed. Two in a row is no longer the
+# network having a moment, and still alerts.
+_SELF_RECOVERED = re.compile(r'\(1 consecutive\)\s*--\s*continuing')
+
+
+def _is_self_recovered_blip(line):
+    return bool(_SELF_RECOVERED.search(line))
+
+
 def check_new_log_errors(unit, since_iso, error_log=None, now=None):
     """Detection is unchanged -- errors in the journal since the previous run
     -- but occurrences are now recorded in error_log so the alert survives
@@ -556,7 +575,8 @@ def check_new_log_errors(unit, since_iso, error_log=None, now=None):
         cmd += ['-n', '50']
     result = subprocess.run(cmd, capture_output=True, text=True)
     lines = result.stdout.splitlines()
-    bad_lines = [l for l in lines if 'Traceback' in l or 'ERROR' in l]
+    bad_lines = [l for l in lines if ('Traceback' in l or 'ERROR' in l)
+                 and not _is_self_recovered_blip(l)]
 
     if error_log is None:
         # Stateless fallback: original behaviour, alert only on a fresh hit.

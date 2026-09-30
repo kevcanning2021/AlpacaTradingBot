@@ -16,3 +16,4 @@ venv/
 *.bak
 zero_since_state.json
 agent_review_queue.jsonl
+agent_review_queue.processed.jsonl
