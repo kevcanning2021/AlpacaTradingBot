@@ -21,6 +21,7 @@ and a script that quietly makes those is far more dangerous than one that gets
 ignored. Compare the stale-code restart in watchdog.py, which IS auto-fixed
 precisely because it is one deterministic command with no judgement in it.
 """
+import json
 import os
 import sqlite3
 from datetime import datetime, time as dt_time, timedelta, timezone
@@ -179,10 +180,138 @@ def check_all(now=None):
     """Every journal-based check. Each is isolated so one failure cannot take the
     others down with it."""
     issues = []
-    for fn in (check_silent_bots, check_oversized_losses, check_rapid_reentry):
+    for fn in (check_silent_bots, check_oversized_losses, check_rapid_reentry,
+               check_approaching_setup_disable, check_config_drift):
         try:
             issues += fn(now=now)
         except Exception as e:
             issues.append(('watchdog_internal_error:%s' % fn.__name__,
                            'trading-health check %s crashed: %s' % (fn.__name__, e)))
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Added 2026-10-01 after the account owner said, correctly, that he still has to
+# check because too much gets missed. Each gap below had already bitten once.
+
+SETUP_MIN_TRADES = 15          # mirrors TradeJournal.is_setup_disabled
+SETUP_MIN_AVG_R = -0.1         # mirrors TradeJournal.is_setup_disabled
+SETUP_WARN_AT = 10             # warn while there is still time to react
+DRAWDOWN_ALERT_PCT = 2.0       # from the high-water mark, per account
+WATERMARK_PATH = "/opt/alpaca-bot-test/equity_watermark.json"
+
+BOT_ENVS = {
+    "Nova": "/opt/trading-2-0/.env",
+    "Main": "/opt/nova-main/.env",
+    "Sofi": "/opt/nova-sofi/.env",
+}
+
+# What each bot is SUPPOSED to be running, as decided 2026-09-29/30. A silent
+# revert of any of these is invisible otherwise -- the crypto side effect that put
+# half of Main into one ETH trade was exactly this shape, a setting reaching further
+# than intended with nothing watching.
+EXPECTED_ENV = {
+    "Main": {"USE_BROKER_BRACKETS": "true", "CRYPTO_WATCHLIST": "",
+             "MAX_POSITION_NOTIONAL_PCT": "0.25", "MAX_CONCURRENT_POSITIONS": "4"},
+}
+
+
+def _env_values(path):
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _setup_since(env_path):
+    return _env_values(env_path).get("SETUP_STATS_SINCE", "2026-09-28T18:00")
+
+
+def check_approaching_setup_disable(now=None):
+    """Warn BEFORE a bot switches itself off, not three days after.
+
+    is_setup_disabled trips at 15 trades with avgR below -0.1, and when it trips the
+    bot simply stops trading -- which is then only caught by check_silent_bots, after
+    three days of silence. On 2026-09-30 that cost nova-main two full days. A warning
+    at 10 trades leaves room to look at why before it happens.
+    """
+    issues = []
+    for label, db in BOT_JOURNALS.items():
+        since = _setup_since(BOT_ENVS.get(label, ""))
+        rows = _rows(db,
+                     "SELECT setup_type, COUNT(*) n, AVG(pnl_r) avg_r FROM trades "
+                     "WHERE outcome != ? AND entry_time > ? GROUP BY setup_type",
+                     ("open", since))
+        for r in (rows or []):
+            n, avg_r = r["n"], r["avg_r"] or 0.0
+            if n >= SETUP_MIN_TRADES or n < SETUP_WARN_AT or avg_r >= SETUP_MIN_AVG_R:
+                continue
+            issues.append((
+                "setup_near_disable:%s:%s" % (label, r["setup_type"]),
+                "[%s] %s is %d trades from switching itself OFF: n=%d, avgR %+.3f "
+                "against a %.1f threshold at %d trades. When it trips the bot stops "
+                "trading entirely and nothing notices for days."
+                % (label, r["setup_type"], SETUP_MIN_TRADES - n, n, avg_r,
+                   SETUP_MIN_AVG_R, SETUP_MIN_TRADES)))
+    return issues
+
+
+def check_config_drift(now=None):
+    """Has a bot quietly stopped running the configuration it is supposed to?"""
+    issues = []
+    for label, expected in EXPECTED_ENV.items():
+        path = BOT_ENVS.get(label)
+        if not path or not os.path.exists(path):
+            continue
+        actual = _env_values(path)
+        for key, want in expected.items():
+            got = actual.get(key)
+            if got is None:
+                issues.append(("config_drift:%s:%s" % (label, key),
+                               "[%s] %s is MISSING from its .env; expected %r. The "
+                               "default will apply instead." % (label, key, want)))
+            elif got != want:
+                issues.append(("config_drift:%s:%s" % (label, key),
+                               "[%s] %s is %r but should be %r." % (label, key, got, want)))
+    return issues
+
+
+def check_drawdown(account_key, label, client, now=None):
+    """Equity against its own high-water mark. Nothing watched this before, so the
+    $878 day on 2026-09-30 raised no flag at all."""
+    try:
+        acct = client.get_account()
+        equity = float(acct.get("equity"))
+    except Exception as e:
+        return [("watchdog_internal_error:drawdown:%s" % account_key,
+                 "could not read equity for %s: %s" % (label, e))]
+    marks = {}
+    if os.path.exists(WATERMARK_PATH):
+        try:
+            with open(WATERMARK_PATH, encoding="utf-8") as fh:
+                marks = json.load(fh)
+        except Exception:
+            marks = {}
+    peak = max(float(marks.get(account_key, 0.0)), equity)
+    marks[account_key] = peak
+    try:
+        with open(WATERMARK_PATH, "w", encoding="utf-8") as fh:
+            json.dump(marks, fh, indent=2)
+    except Exception:
+        pass
+    if peak <= 0:
+        return []
+    dd = (peak - equity) / peak * 100.0
+    if dd < DRAWDOWN_ALERT_PCT:
+        return []
+    return [("drawdown:%s" % account_key,
+             "[%s] equity $%.2f is %.2f%% below its high-water mark of $%.2f. "
+             "Nothing else watches account-level loss -- the per-trade checks only "
+             "see individual trades." % (label, equity, dd, peak))]

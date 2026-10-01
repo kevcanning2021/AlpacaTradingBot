@@ -1078,6 +1078,8 @@ def main():
                 _c.secret_key = cfg['secret_key']
                 all_issues += trading_health.check_positions_after_close(
                     account_key, cfg['label'], _c)
+                all_issues += trading_health.check_drawdown(
+                    account_key, cfg['label'], _c)
         except Exception as e:
             print(f"after-close check failed for {account_key}: {e}")
             all_issues.append((f'watchdog_internal_error:after_close:{account_key}',
