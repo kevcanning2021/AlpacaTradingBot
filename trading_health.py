@@ -24,6 +24,7 @@ precisely because it is one deterministic command with no judgement in it.
 import json
 import os
 import sqlite3
+import subprocess
 from datetime import datetime, time as dt_time, timedelta, timezone
 
 BOT_JOURNALS = {
@@ -41,6 +42,32 @@ RAPID_REENTRY_MINUTES = 60    # mirrors RiskConfig.reentry_cooldown_minutes
 # that would have pinged the phone every 15 minutes for the 24-hour lookback.
 # MOVE THIS if the cooldown is ever disabled and re-enabled.
 COOLDOWN_LIVE_SINCE = '2026-09-30T20:22'
+
+
+BOT_UNITS = {
+    "Nova": "trading-2-0.service",
+    "Main": "nova-main.service",
+    "Sofi": "nova-sofi.service",
+}
+
+
+def _is_retired(label):
+    """True when this bot's unit is DISABLED, i.e. deliberately off.
+
+    Mirrors check_services in watchdog.py, which treats a disabled unit as retired
+    on purpose rather than broken. Without this, stopping a bot on purpose produces
+    a stream of alerts about it not trading -- complaining about the thing you were
+    just asked to do.
+    """
+    unit = BOT_UNITS.get(label)
+    if not unit:
+        return False
+    try:
+        out = subprocess.run(["systemctl", "is-enabled", unit],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() == "disabled"
+    except Exception:
+        return False   # cannot tell -> assume live, so a real problem still alerts
 
 
 def _rows(db_path, sql, params=()):
@@ -78,6 +105,8 @@ def check_silent_bots(now=None):
     now = now or datetime.now(timezone.utc)
     issues = []
     for label, db in BOT_JOURNALS.items():
+        if _is_retired(label):
+            continue   # deliberately stopped; see _is_retired
         rows = _rows(db, 'SELECT MAX(entry_time) AS t FROM trades')
         if not rows:
             continue
@@ -105,6 +134,8 @@ def check_oversized_losses(now=None):
     issues = []
     since = (now - timedelta(hours=24)).isoformat()
     for label, db in BOT_JOURNALS.items():
+        if _is_retired(label):
+            continue   # deliberately stopped; see _is_retired
         rows = _rows(db,
                      'SELECT symbol, entry_time, pnl_r, pnl_dollars FROM trades '
                      'WHERE pnl_r IS NOT NULL AND pnl_r < ? AND exit_time > ? ORDER BY pnl_r',
@@ -125,6 +156,8 @@ def check_rapid_reentry(now=None):
     issues = []
     since = (now - timedelta(hours=24)).isoformat()
     for label, db in BOT_JOURNALS.items():
+        if _is_retired(label):
+            continue   # deliberately stopped; see _is_retired
         rows = _rows(db,
                      'SELECT symbol, entry_time, exit_time, outcome FROM trades '
                      'WHERE entry_time > ? ORDER BY symbol, entry_time', (since,))
@@ -244,6 +277,8 @@ def check_approaching_setup_disable(now=None):
     """
     issues = []
     for label, db in BOT_JOURNALS.items():
+        if _is_retired(label):
+            continue   # deliberately stopped; see _is_retired
         since = _setup_since(BOT_ENVS.get(label, ""))
         rows = _rows(db,
                      "SELECT setup_type, COUNT(*) n, AVG(pnl_r) avg_r FROM trades "
