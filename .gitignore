@@ -17,3 +17,4 @@ venv/
 zero_since_state.json
 agent_review_queue.jsonl
 agent_review_queue.processed.jsonl
+equity_watermark.json
